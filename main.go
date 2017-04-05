@@ -2,9 +2,11 @@ package main
 
 import (
 	"flag"
+	"fmt"
 	"github.com/PuerkitoBio/goquery"
 	log "github.com/Sirupsen/logrus"
 	zmq "github.com/pebbe/zmq4"
+	"io"
 	"io/ioutil"
 	"net/http"
 	"net/url"
@@ -13,22 +15,27 @@ import (
 	"strings"
 	"sync"
 	"time"
+	_ "github.com/djimenez/iconv-go"
+	_ "golang.org/x/net/html"
 )
 
 const (
 	receiverPort = ":5557"
 	senderPort   = ":5558"
+	maxVisitDeep = 5
 )
 
 var (
-	urls_file     = flag.String("urls_file", "urls.txt", "seed URL file")
-	hander_num    = flag.Int("handler_num", 4, "handler number")
-	sconsole_addr = flag.String("sconsole address", "localhost", "sconsole ip address")
+	urls_file      = flag.String("urls_file", "urls.txt", "seed URL file")
+	hander_num     = flag.Int("handler_num", 4, "handler number")
+	sconsole_addr  = flag.String("sconsole address", "localhost", "sconsole ip address")
+	debug_level    = flag.String("debug_level", "info", "debug level: debug, info, warning, error")
+	max_visit_deep = flag.Int("max_visit_deep", maxVisitDeep, "max visit deep")
 )
 
 var (
-	in   chan *Command  = make(chan *Command, 1)
-	out  chan *Command  = make(chan *Command, 1)
+	inQ  chan *Command  = make(chan *Command, 1)
+	outQ chan *Command  = make(chan *Command, 1)
 	logQ chan *VisitLog = make(chan *VisitLog, 1)
 )
 
@@ -53,27 +60,46 @@ func (zt *zmqTool) close() {
 	zt.receiver.Close()
 	zt.sender.Close()
 }
-func init() {
+
+func main() {
+	//fmt.Println("大家好")
+	flag.Parse()
 	// Log as JSON instead of the default ASCII formatter.
 	//log.SetFormatter(&log.JSONFormatter{})
 	log.SetFormatter(&log.TextFormatter{})
 
 	// Output to stdout instead of the default stderr
 	// Can be any io.Writer, see below for File example
-	//log.SetOutput(os.Stdout)
+	log.SetOutput(os.Stdout)
 	file, err := os.OpenFile("logrus.log", os.O_CREATE|os.O_WRONLY, 0666)
 	if err == nil {
-		log.SetOutput(file)
+		//	log.SetOutput(file)
+		log.SetOutput(io.MultiWriter(file, os.Stdout))
+
 	} else {
 		log.Info("Failed to log to file, using default stderr")
 	}
 
+	defer file.Close()
 	// Only log the warning severity or above.
-	log.SetLevel(log.DebugLevel)
-}
+	fmt.Printf(*debug_level)
+	var l log.Level
+	switch *debug_level {
+	case "debug":
+		l = log.DebugLevel
+	case "info":
+		l = log.InfoLevel
+	case "warn":
+		l = log.WarnLevel
+	case "error":
+		l = log.ErrorLevel
+	}
 
-func main() {
-	flag.Parse()
+	log.SetLevel(l)
+	//log.SetLevel(log.DebugLevel)
+	log.Info("info level set")
+	log.Error("error level set")
+	fmt.Println("debuglevel=", *debug_level)
 
 	zt := newZmqTool()
 	defer zt.close()
@@ -95,7 +121,7 @@ func main() {
 
 	urls, err := ioutil.ReadFile(*urls_file)
 	if err != nil {
-		log.Debug("read urls.txt error, ", err)
+		log.Error("read urls.txt error, ", err)
 		return
 	}
 
@@ -105,15 +131,17 @@ func main() {
 	go parseQueue(cms)
 
 	for _, str := range strs {
-		log.Debug("before q<-str, str=", str)
 		if len(str) > 0 {
 			u, err := url.Parse(str)
 			if err == nil {
 
-				cmd := &Command{Source: "", Url: u.String(), Accessed: unknown}
+				cmd := &Command{Source: "",
+					Url:      u.String(),
+					Accessed: unknown,
+					Deep:     0}
 
 				log.Debug("cmd=", cmd)
-				in <- cmd
+				inQ <- cmd
 			}
 		}
 	}
@@ -136,12 +164,12 @@ func parseQueue(cms *cmdStore) {
 		if outCmd == nil {
 			log.Debug("outCmd == nil")
 			outCmd, err = cms.nextCommand()
-			log.Debug("outCmd=", outCmd)
+			log.Debugln("outCmd=", outCmd)
 			if err != nil {
 				//should be not found err ontinue
-				log.Debug("should not be found here")
+				log.Warnln("should not be found here")
 
-				incmd := <-in
+				incmd := <-inQ
 				//cms.updateCommand(incmd.Url)
 				log.Debug("incmd=", incmd)
 				cms.addCommand(incmd)
@@ -150,12 +178,12 @@ func parseQueue(cms *cmdStore) {
 			}
 		}
 		select {
-		case incmd := <-in:
+		case incmd := <-inQ:
 			//log.Debug("incmd=", incmd)
 			//cms.updateCommand(incmd.Url)
 			cms.addCommand(incmd)
-		case out <- outCmd:
-			log.Debug("out<-outCmd,outCmd=", outCmd)
+		case outQ <- outCmd:
+			log.Debug("outQ<-outCmd,outCmd=", outCmd)
 			cms.updateCommand(outCmd.Url)
 			outCmd = nil
 		case vl := <-logQ:
@@ -168,7 +196,7 @@ func parseQueue(cms *cmdStore) {
 func handler(zt *zmqTool, wg *sync.WaitGroup) {
 	for {
 		log.Debug("before s:=<-q")
-		cmd := <-out
+		cmd := <-outQ
 		if cmd == nil {
 			log.Debug(" end of cmds ")
 			break
@@ -177,7 +205,7 @@ func handler(zt *zmqTool, wg *sync.WaitGroup) {
 
 		u, err := url.Parse(cmd.Url)
 		if err != nil {
-			log.Debug("url.Parse err, ", err)
+			log.Errorln("url.Parse err, ", err)
 		}
 		//zt.sender.Send("will visit "+u.String(), 0)
 		client := http.Client{
@@ -186,12 +214,16 @@ func handler(zt *zmqTool, wg *sync.WaitGroup) {
 
 		//client := http.Client{}
 
-		log.Debug("before Get, url=",u.String())
+		//log..Info("processing, url=",u.String())
+		log.WithFields(log.Fields{
+			"url": u.String(),
+		}).Info("processing")
+
 		resp, err := client.Get(u.String())
 		//defer resp.Body.Close()
 
 		if err != nil {
-			log.Debug("error message: %s\n", err)
+			log.Error("error message: %s\n", err)
 			continue
 		}
 
@@ -201,12 +233,27 @@ func handler(zt *zmqTool, wg *sync.WaitGroup) {
 			log.Debug("goquery.NewDocumentFromResponse err=", err)
 			continue
 		}
+/*
+		encoding, err := doc.Find("head meta").Attr("charset")
+		if err != nil {
+			log.Error("find encoding err, ", err)
+			continue
 
-		title := doc.Find("html title").Text()
-		log.Debug("title=%s\n", title)
+		}
+		
+		// Convert the designated charset HTML to utf-8 encoded HTML.
+		// `charset` being one of the charsets known by the iconv package.
+		utfBody, err := iconv.NewReader(resp.Body, encoding, "utf-8")
+		if err != nil {
+    		// handler error
+		}
+*/
 
 		description, _ := doc.Find("head meta[name='description']").Attr("content")
 		log.Debug("description=%s\n", description)
+		
+		title := doc.Find("html title").Text()
+		log.Debug("title=%s\n", title)
 		/*for host,deep:=range f.deep{
 			log.Debug("crew deep =%d, host=%s",deep,host)
 
@@ -216,16 +263,19 @@ func handler(zt *zmqTool, wg *sync.WaitGroup) {
 			log.Debug("crew deep reached, host=%s",cmd.u.Host)
 			return nil
 		}*/
+		log.WithFields(log.Fields{"title": title, "description": description}).Info("content received")
 		vl := &VisitLog{u.String(), title, description}
 
 		logQ <- vl
-
+		if cmd.Deep >= *max_visit_deep {
+			continue
+		}
 		doc.Find("a[href]").Each(func(i int, s *goquery.Selection) {
 			val, _ := s.Attr("href")
 			//log.Debug("doc.find: val=%s\n", val)
-			u, err := url.Parse(val)
+			u, err := u.Parse(val)
 			if err != nil {
-				log.Debug("parse failed\n")
+				log.Error("parse failed\n")
 				return
 			}
 			//log.Debug("q len is %di\n", len(q))
@@ -235,7 +285,7 @@ func handler(zt *zmqTool, wg *sync.WaitGroup) {
 				ss = ss[0:i]
 			}
 
-			in <- &Command{cmd.Url, ss, unknown}
+			inQ <- &Command{cmd.Url, ss, unknown, cmd.Deep + 1}
 			//f.back <- PageInfo{*u, title, description}
 
 		})
