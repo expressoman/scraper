@@ -5,7 +5,9 @@ import (
 	"fmt"
 	"github.com/PuerkitoBio/goquery"
 	log "github.com/Sirupsen/logrus"
+	"github.com/djimenez/iconv-go"
 	zmq "github.com/pebbe/zmq4"
+	_ "golang.org/x/net/html"
 	"io"
 	"io/ioutil"
 	"net/http"
@@ -15,8 +17,6 @@ import (
 	"strings"
 	"sync"
 	"time"
-	_ "github.com/djimenez/iconv-go"
-	_ "golang.org/x/net/html"
 )
 
 const (
@@ -62,7 +62,6 @@ func (zt *zmqTool) close() {
 }
 
 func main() {
-	//fmt.Println("大家好")
 	flag.Parse()
 	// Log as JSON instead of the default ASCII formatter.
 	//log.SetFormatter(&log.JSONFormatter{})
@@ -96,10 +95,6 @@ func main() {
 	}
 
 	log.SetLevel(l)
-	//log.SetLevel(log.DebugLevel)
-	log.Info("info level set")
-	log.Error("error level set")
-	fmt.Println("debuglevel=", *debug_level)
 
 	zt := newZmqTool()
 	defer zt.close()
@@ -136,6 +131,7 @@ func main() {
 			if err == nil {
 
 				cmd := &Command{Source: "",
+					Host:     u.Host,
 					Url:      u.String(),
 					Accessed: unknown,
 					Deep:     0}
@@ -160,12 +156,10 @@ func parseQueue(cms *cmdStore) {
 	var outCmd *Command
 	var err error
 	for {
-
 		if outCmd == nil {
 			log.Debug("outCmd == nil")
 			outCmd, err = cms.nextCommand()
-			log.Debugln("outCmd=", outCmd)
-			if err != nil {
+			if err != nil || outCmd ==nil {
 				//should be not found err ontinue
 				log.Warnln("should not be found here")
 
@@ -176,6 +170,7 @@ func parseQueue(cms *cmdStore) {
 				outCmd = nil
 				continue
 			}
+			log.Debugln("outCmd=", outCmd)
 		}
 		select {
 		case incmd := <-inQ:
@@ -216,9 +211,9 @@ func handler(zt *zmqTool, wg *sync.WaitGroup) {
 
 		//log..Info("processing, url=",u.String())
 		log.WithFields(log.Fields{
-			"url": u.String(),
-		}).Info("processing")
-
+				"url": u.String(),
+					}).Info("processing")
+		
 		resp, err := client.Get(u.String())
 		//defer resp.Body.Close()
 
@@ -226,43 +221,39 @@ func handler(zt *zmqTool, wg *sync.WaitGroup) {
 			log.Error("error message: %s\n", err)
 			continue
 		}
+		v := resp.Header.Get("Content-Type")
+		log.WithFields(log.Fields{"charset": v}).Debug("charset")
 
-		doc, err := goquery.NewDocumentFromResponse(resp)
+		cs := strings.Split(v, "=")
+		v = "GBK"
+
+		if len(cs) == 2 {
+			v = cs[1]
+		} else {
+			log.Error("wrong charset, can not process, continue")
+			continue
+		}
+		// Convert the designated charset HTML to utf-8 encoded HTML.
+		// `charset` being one of the charsets known by the iconv package.
+		utfBody, err := iconv.NewReader(resp.Body, v, "utf-8")
+		if err != nil {
+			// handler error
+			log.Error("iconv.NewReader return err=",err)
+		}
+
+		//doc, err := goquery.NewDocumentFromResponse(resp)
+		doc, err := goquery.NewDocumentFromReader(utfBody)
 		if err != nil {
 			//log.Debug("[ERR] %s %s - %s\n", ctx.Cmd.Method(), ctx.Cmd.URL(), err)
 			log.Debug("goquery.NewDocumentFromResponse err=", err)
 			continue
 		}
-/*
-		encoding, err := doc.Find("head meta").Attr("charset")
-		if err != nil {
-			log.Error("find encoding err, ", err)
-			continue
-
-		}
-		
-		// Convert the designated charset HTML to utf-8 encoded HTML.
-		// `charset` being one of the charsets known by the iconv package.
-		utfBody, err := iconv.NewReader(resp.Body, encoding, "utf-8")
-		if err != nil {
-    		// handler error
-		}
-*/
 
 		description, _ := doc.Find("head meta[name='description']").Attr("content")
-		log.Debug("description=%s\n", description)
-		
+		//log.Debugf("description=%s", description)
+
 		title := doc.Find("html title").Text()
-		log.Debug("title=%s\n", title)
-		/*for host,deep:=range f.deep{
-			log.Debug("crew deep =%d, host=%s",deep,host)
-
-		}
-
-		if(f.deep[cmd.u.Host]>=f.deepLimit){
-			log.Debug("crew deep reached, host=%s",cmd.u.Host)
-			return nil
-		}*/
+		
 		log.WithFields(log.Fields{"title": title, "description": description}).Info("content received")
 		vl := &VisitLog{u.String(), title, description}
 
@@ -285,7 +276,7 @@ func handler(zt *zmqTool, wg *sync.WaitGroup) {
 				ss = ss[0:i]
 			}
 
-			inQ <- &Command{cmd.Url, ss, unknown, cmd.Deep + 1}
+			inQ <- &Command{cmd.Url, u.Host, ss, unknown, cmd.Deep + 1}
 			//f.back <- PageInfo{*u, title, description}
 
 		})

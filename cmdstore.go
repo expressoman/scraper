@@ -22,6 +22,7 @@ const (
 
 type Command struct {
 	Source   string
+	Host     string
 	Url      string
 	Accessed int
 	Deep     int
@@ -36,6 +37,7 @@ type VisitLog struct {
 type cmdStore struct {
 	session *mgo.Session
 	db      *mgo.Database
+	hosts   map[string]int
 }
 
 func newCmdStore(dbName string) *cmdStore {
@@ -65,6 +67,7 @@ func newCmdStore(dbName string) *cmdStore {
 	cms.session = session
 
 	cms.db = session.DB(dbName)
+	cms.hosts = make(map[string]int)
 	return cms
 }
 
@@ -77,18 +80,46 @@ func (cms *cmdStore) addCommand(cmd *Command) error {
 	if err != nil {
 		log.Debug("cmd insert err:", err)
 	}
+
+	//c = cms.db.C("hosts")
+	/*u,err:= url.Parse(cmd.Url)
+	if err != nil {
+		log.Error("url parse error")
+	}else{
+		cms.hosts[u.Hostname()]++
+	}*/
+
+	cms.hosts[cmd.Host]++
+
 	return err
 }
 
+func (cms *cmdStore) isDupHost(cmd *Command) {
+
+}
 func (cms *cmdStore) nextCommand() (*Command, error) {
 	c := cms.db.C(colName)
 	//query:=fmt.Sprintf("{accessed:%d}",unknown)
 	//log.Debug("query=",query)
 	var cmd Command
+	var hostname string
+	var err error
+	if len(cms.hosts) == 0 { return nil,nil }
+	for h, _ := range cms.hosts {
+		hostname = h
+		log.Debug("host :", hostname)
 
-	err := c.Find(bson.M{"accessed": unknown}).One(&cmd)
-	if err != nil {
-		log.Debug("find err=", err)
+		if len(hostname) > 0 {
+			err = c.Find(bson.M{"accessed": unknown, "host": hostname}).One(&cmd)
+		} else {
+			err = c.Find(bson.M{"accessed": unknown}).One(&cmd)
+		}
+
+		if err != nil {
+			log.Error("find err=", err)
+		}else{
+			break
+		}
 	}
 
 	return &cmd, err
@@ -116,30 +147,3 @@ func (cms *cmdStore) close() {
 	cms.session.Close()
 }
 
-/*
-func main() {
-
-	session, err := mgo.Dial("mongodb://superAdmin:mstoobad@127.0.0.1:27017/test?authSource=admin")
-	if err != nil {
-		panic(err)
-	}
-	defer session.Close()
-
-	// Optional. Switch the session to a monotonic behavior.
-	session.SetMode(mgo.Monotonic, true)
-
-	c := session.DB("test").C("people")
-	err = c.Insert(&Person{"Ale", "+55 53 8116 9639"},
-		&Person{"Cla", "+55 53 8402 8510"})
-	if err != nil {
-		log.Fatal(err)
-	}
-
-	result := Person{}
-	err = c.Find(bson.M{"name": "Ale"}).One(&result)
-	if err != nil {
-		log.Fatal(err)
-	}
-
-	fmt.Debug("Phone:", result.Phone)
-}*/
