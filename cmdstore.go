@@ -11,7 +11,9 @@ const (
 	//cmdStoreAddr string = "mongodb://superAdmin:mstoobad@127.0.0.1:27017/%s?authSource=admin"
 	cmdStoreAddr string = "mongodb://127.0.0.1/%s"
 	dbName       string = "scraper"
-	colName      string = "Command"
+	cmdCol       string = "Command"
+	visitCol     string = "Visit"
+	hostsCol     string = "Hosts"
 )
 const (
 	unknown = iota
@@ -39,6 +41,10 @@ type cmdStore struct {
 	db      *mgo.Database
 	hosts   map[string]int
 }
+type Host struct {
+	Hostname string
+	UrlNum   int
+}
 
 func newCmdStore(dbName string) *cmdStore {
 	cms := new(cmdStore)
@@ -50,7 +56,7 @@ func newCmdStore(dbName string) *cmdStore {
 	}
 
 	session.SetMode(mgo.Monotonic, true)
-	c := session.DB(dbName).C(colName)
+	c := session.DB(dbName).C(cmdCol)
 	// Index
 	index := mgo.Index{
 		Key:        []string{"url"},
@@ -63,25 +69,35 @@ func newCmdStore(dbName string) *cmdStore {
 	if err != nil {
 		panic(err)
 	}
+	c = session.DB(dbName).C(hostsCol)
+	// Index
+	index1 := mgo.Index{
+		Key:        []string{"hostname"},
+		Unique:     true,
+		DropDups:   true,
+		Background: true,
+		Sparse:     true,
+	}
+	err = c.EnsureIndex(index1)
+	if err != nil {
+		panic(err)
+	}
 
 	cms.session = session
 
 	cms.db = session.DB(dbName)
-	cms.hosts = make(map[string]int)
-	return cms
-}
 
-func (cms *cmdStore) addCommand(cmd *Command) error {
-	c := cms.db.C(colName)
-	err := c.Insert(cmd)
-	//err:=c.Insert(&Command{Source:"test",Url:"tttt",Accessed:111})
-	log.Debug("cmd=", cmd)
-	//err:=c.Insert(&Command{source:cmd.source,url:cmd.url,accessed:cmd.accessed})
-	if err != nil {
-		log.Debug("cmd insert err:", err)
+	cms.hosts = make(map[string]int)
+
+	c = cms.db.C(hostsCol)
+
+	var results []Host
+	c.Find(nil).All(&results)
+
+	for _, h := range results {
+		cms.hosts[h.Hostname] = h.UrlNum
 	}
 
-	//c = cms.db.C("hosts")
 	/*u,err:= url.Parse(cmd.Url)
 	if err != nil {
 		log.Error("url parse error")
@@ -89,35 +105,52 @@ func (cms *cmdStore) addCommand(cmd *Command) error {
 		cms.hosts[u.Hostname()]++
 	}*/
 
+	return cms
+}
+
+func (cms *cmdStore) addCommand(cmd *Command) error {
+	c := cms.db.C(cmdCol)
+	err := c.Insert(cmd)
+	//err:=c.Insert(&Command{Source:"test",Url:"tttt",Accessed:111})
+	log.Debug("cmd=", cmd)
+	//err:=c.Insert(&Command{source:cmd.source,url:cmd.url,accessed:cmd.accessed})
+	if err != nil {
+		log.Debug("cmd insert err:", err)
+	}
+	c = cms.db.C(hostsCol)
+
+	//err = c.Find(Bson.M{"host":cmd.Host}).All(
+	err = c.Insert(&Host{Hostname: cmd.Host, UrlNum: 0})
+
 	cms.hosts[cmd.Host]++
 
 	return err
 }
 
-func (cms *cmdStore) isDupHost(cmd *Command) {
-
-}
 func (cms *cmdStore) nextCommand() (*Command, error) {
-	c := cms.db.C(colName)
+	c := cms.db.C(cmdCol)
 	//query:=fmt.Sprintf("{accessed:%d}",unknown)
 	//log.Debug("query=",query)
 	var cmd Command
 	var hostname string
 	var err error
-	if len(cms.hosts) == 0 { return nil,nil }
+	if len(cms.hosts) == 0 {
+		return nil, nil
+	}
 	for h, _ := range cms.hosts {
 		hostname = h
 		log.Debug("host :", hostname)
 
 		if len(hostname) > 0 {
-			err = c.Find(bson.M{"accessed": unknown, "host": hostname}).One(&cmd)
+			//err = c.Find(bson.M{"accessed": unknown, "host": hostname}).One(&cmd)
+			err = c.Find(bson.M{"accessed": unknown, "host":hostname}).One(&cmd)
 		} else {
 			err = c.Find(bson.M{"accessed": unknown}).One(&cmd)
 		}
 
 		if err != nil {
-			log.Error("find err=", err)
-		}else{
+			log.Errorf("find err=%v, hostname=%s", err, hostname)
+		} else {
 			break
 		}
 	}
@@ -126,7 +159,7 @@ func (cms *cmdStore) nextCommand() (*Command, error) {
 
 }
 func (cms *cmdStore) updateCommand(url string) error {
-	c := cms.db.C(colName)
+	c := cms.db.C(cmdCol)
 	err := c.Update(bson.M{"url": url}, bson.M{"$set": bson.M{"accessed": inQueue}})
 	if err != nil {
 		log.Fatal("cmd update failed, err=", err)
@@ -135,7 +168,7 @@ func (cms *cmdStore) updateCommand(url string) error {
 }
 
 func (cms *cmdStore) visitLog(vl *VisitLog) error {
-	c := cms.db.C("log")
+	c := cms.db.C(visitCol)
 	err := c.Insert(vl)
 	if err != nil {
 		log.Debug("visitLog insert err:", err)
@@ -146,4 +179,3 @@ func (cms *cmdStore) visitLog(vl *VisitLog) error {
 func (cms *cmdStore) close() {
 	cms.session.Close()
 }
-

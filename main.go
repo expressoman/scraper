@@ -70,13 +70,13 @@ func main() {
 	// Output to stdout instead of the default stderr
 	// Can be any io.Writer, see below for File example
 	log.SetOutput(os.Stdout)
-	file, err := os.OpenFile("logrus.log", os.O_CREATE|os.O_WRONLY, 0666)
+	file, err := os.OpenFile("logrus.log", os.O_CREATE|os.O_RDWR|os.O_TRUNC, 0666)
 	if err == nil {
 		//	log.SetOutput(file)
 		log.SetOutput(io.MultiWriter(file, os.Stdout))
 
 	} else {
-		log.Info("Failed to log to file, using default stderr")
+		log.Fatal("Failed to log to file, using default stderr")
 	}
 
 	defer file.Close()
@@ -104,11 +104,8 @@ func main() {
 	if *hander_num > v {
 		*hander_num = v
 	}
-	//q := make(chan *url.URL, 1e8)
-
-	//for test
-	//*hander_num = 10
 	var wg sync.WaitGroup
+
 	for i := 0; i < *hander_num; i++ {
 		wg.Add(1)
 		go handler(zt, &wg)
@@ -131,7 +128,7 @@ func main() {
 			if err == nil {
 
 				cmd := &Command{Source: "",
-					Host:     u.Host,
+					Host:     rootHostname(u.Hostname()),
 					Url:      u.String(),
 					Accessed: unknown,
 					Deep:     0}
@@ -141,11 +138,6 @@ func main() {
 			}
 		}
 	}
-
-	/*
-		for i := 0; i < *hander_num; i++ {
-			q <- nil
-		}*/
 
 	wg.Wait()
 
@@ -159,7 +151,7 @@ func parseQueue(cms *cmdStore) {
 		if outCmd == nil {
 			log.Debug("outCmd == nil")
 			outCmd, err = cms.nextCommand()
-			if err != nil || outCmd ==nil {
+			if err != nil || outCmd == nil {
 				//should be not found err ontinue
 				log.Warnln("should not be found here")
 
@@ -188,6 +180,18 @@ func parseQueue(cms *cmdStore) {
 
 	}
 }
+
+func rootHostname(hostname string) string {
+
+	v := strings.Split(hostname, ".")
+
+	l := len(v)
+
+	if len(v) <= 2 {
+		return ""
+	}
+	return v[l-2] + "." + v[l-1]
+}
 func handler(zt *zmqTool, wg *sync.WaitGroup) {
 	for {
 		log.Debug("before s:=<-q")
@@ -211,9 +215,9 @@ func handler(zt *zmqTool, wg *sync.WaitGroup) {
 
 		//log..Info("processing, url=",u.String())
 		log.WithFields(log.Fields{
-				"url": u.String(),
-					}).Info("processing")
-		
+			"url": u.String(),
+		}).Info("processing")
+
 		resp, err := client.Get(u.String())
 		//defer resp.Body.Close()
 
@@ -238,7 +242,7 @@ func handler(zt *zmqTool, wg *sync.WaitGroup) {
 		utfBody, err := iconv.NewReader(resp.Body, v, "utf-8")
 		if err != nil {
 			// handler error
-			log.Error("iconv.NewReader return err=",err)
+			log.Error("iconv.NewReader return err=", err)
 		}
 
 		//doc, err := goquery.NewDocumentFromResponse(resp)
@@ -253,7 +257,7 @@ func handler(zt *zmqTool, wg *sync.WaitGroup) {
 		//log.Debugf("description=%s", description)
 
 		title := doc.Find("html title").Text()
-		
+
 		log.WithFields(log.Fields{"title": title, "description": description}).Info("content received")
 		vl := &VisitLog{u.String(), title, description}
 
@@ -276,8 +280,17 @@ func handler(zt *zmqTool, wg *sync.WaitGroup) {
 				ss = ss[0:i]
 			}
 
-			inQ <- &Command{cmd.Url, u.Host, ss, unknown, cmd.Deep + 1}
-			//f.back <- PageInfo{*u, title, description}
+			rh := rootHostname(u.Hostname())
+
+			deep := 0
+			if rh == cmd.Host {
+				deep = cmd.Deep + 1
+			}
+			inQ <- &Command{cmd.Url,
+				rh,
+				ss,
+				unknown,
+				deep}
 
 		})
 
