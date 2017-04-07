@@ -70,7 +70,7 @@ func main() {
 	// Output to stdout instead of the default stderr
 	// Can be any io.Writer, see below for File example
 	log.SetOutput(os.Stdout)
-	file, err := os.OpenFile("logrus.log", os.O_CREATE|os.O_RDWR|os.O_TRUNC, 0666)
+	file, err := os.OpenFile("scraper.log", os.O_CREATE|os.O_RDWR|os.O_TRUNC, 0666)
 	if err == nil {
 		//	log.SetOutput(file)
 		log.SetOutput(io.MultiWriter(file, os.Stdout))
@@ -101,7 +101,7 @@ func main() {
 
 	v := runtime.NumCPU()
 	log.Debug("NumCPU=", v)
-	if *hander_num > v {
+	if *hander_num < v {
 		*hander_num = v
 	}
 	var wg sync.WaitGroup
@@ -229,27 +229,28 @@ func handler(zt *zmqTool, wg *sync.WaitGroup) {
 		log.WithFields(log.Fields{"charset": v}).Debug("charset")
 
 		cs := strings.Split(v, "=")
-		v = "GBK"
+		vd := "GBK"
 
 		if len(cs) == 2 {
-			v = cs[1]
+			vd = cs[1]
 		} else {
-			log.Error("wrong charset, can not process, continue")
+			log.Errorf("wrong charset,%s,  can not process, continue",v)
 			continue
 		}
 		// Convert the designated charset HTML to utf-8 encoded HTML.
 		// `charset` being one of the charsets known by the iconv package.
-		utfBody, err := iconv.NewReader(resp.Body, v, "utf-8")
+		utfBody, err := iconv.NewReader(resp.Body, vd, "utf-8")
 		if err != nil {
 			// handler error
 			log.Error("iconv.NewReader return err=", err)
+			continue
 		}
 
 		//doc, err := goquery.NewDocumentFromResponse(resp)
 		doc, err := goquery.NewDocumentFromReader(utfBody)
 		if err != nil {
 			//log.Debug("[ERR] %s %s - %s\n", ctx.Cmd.Method(), ctx.Cmd.URL(), err)
-			log.Debug("goquery.NewDocumentFromResponse err=", err)
+			log.Error("goquery.NewDocumentFromResponse err=", err)
 			continue
 		}
 
@@ -270,7 +271,7 @@ func handler(zt *zmqTool, wg *sync.WaitGroup) {
 			//log.Debug("doc.find: val=%s\n", val)
 			u, err := u.Parse(val)
 			if err != nil {
-				log.Error("parse failed\n")
+				log.Errorf("parse failed, href=%s",val)
 				return
 			}
 			//log.Debug("q len is %di\n", len(q))
@@ -291,7 +292,7 @@ func handler(zt *zmqTool, wg *sync.WaitGroup) {
 				ss,
 				unknown,
 				deep}
-
+			//zt.sender.Send(cmd.Url,0)
 		})
 
 		//zt.sender.Send(string(content), 0)

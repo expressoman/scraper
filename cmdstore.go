@@ -40,7 +40,9 @@ type cmdStore struct {
 	session *mgo.Session
 	db      *mgo.Database
 	hosts   map[string]int
+	cmdQue	chan Command
 }
+
 type Host struct {
 	Hostname string
 	UrlNum   int
@@ -89,6 +91,8 @@ func newCmdStore(dbName string) *cmdStore {
 
 	cms.hosts = make(map[string]int)
 
+	cms.cmdQue = make(chan Command,10)
+
 	c = cms.db.C(hostsCol)
 
 	var results []Host
@@ -131,31 +135,58 @@ func (cms *cmdStore) nextCommand() (*Command, error) {
 	c := cms.db.C(cmdCol)
 	//query:=fmt.Sprintf("{accessed:%d}",unknown)
 	//log.Debug("query=",query)
-	var cmd Command
+	var cmds []Command
 	var hostname string
 	var err error
 	if len(cms.hosts) == 0 {
 		return nil, nil
 	}
+
+	if len(cms.cmdQue) > 0 {
+		k:= <-cms.cmdQue
+		log.Printf("cms.cmdQue k=%v len=%d", k,len(cms.cmdQue))
+
+		return &k, nil
+	}
+	
+	sl := make([]string,10)
+	i:=0
 	for h, _ := range cms.hosts {
 		hostname = h
 		log.Debug("host :", hostname)
-
+		sl[i]=hostname
+		i++
+		if i== 10 {
+			err = c.Find(bson.M{"accessed":unknown, 
+					"deep":bson.M{"$lt":*max_visit_deep},
+					"host":bson.M{"$in":sl}}).
+					Limit(10).
+					All(&cmds)
+			if err != nil {
+				log.Errorf("find err=%v, sl=%v", err, sl)
+			} else {
+				break
+			}
+			i=0
+		}
+		/*
 		if len(hostname) > 0 {
 			//err = c.Find(bson.M{"accessed": unknown, "host": hostname}).One(&cmd)
 			err = c.Find(bson.M{"accessed": unknown, "host":hostname}).One(&cmd)
 		} else {
 			err = c.Find(bson.M{"accessed": unknown}).One(&cmd)
-		}
+		}*/
 
-		if err != nil {
-			log.Errorf("find err=%v, hostname=%s", err, hostname)
-		} else {
-			break
-		}
 	}
 
-	return &cmd, err
+	for _,v := range cmds{
+		log.Infof("cms.cmdQue ,v=%v", v)
+		cms.cmdQue<-v
+	}
+	v:=<-cms.cmdQue	
+	return &v, nil
+
+	//return cmds, err
 
 }
 func (cms *cmdStore) updateCommand(url string) error {
