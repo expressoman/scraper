@@ -222,7 +222,7 @@ func handler(zt *zmqTool, wg *sync.WaitGroup) {
 		//defer resp.Body.Close()
 
 		if err != nil {
-			log.Error("error message: %s\n", err)
+			log.Errorf("error message: %s", err)
 			continue
 		}
 		v := resp.Header.Get("Content-Type")
@@ -271,7 +271,7 @@ func handler(zt *zmqTool, wg *sync.WaitGroup) {
 			//log.Debug("doc.find: val=%s\n", val)
 			u, err := u.Parse(val)
 			if err != nil {
-				log.Errorf("parse failed, href=%s",val)
+				log.Errorf("parse failed, href=%s, err=%v",val,err)
 				return
 			}
 			//log.Debug("q len is %di\n", len(q))

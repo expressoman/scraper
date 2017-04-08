@@ -91,7 +91,7 @@ func newCmdStore(dbName string) *cmdStore {
 
 	cms.hosts = make(map[string]int)
 
-	cms.cmdQue = make(chan Command,10)
+	cms.cmdQue = make(chan Command,1000)
 
 	c = cms.db.C(hostsCol)
 
@@ -149,34 +149,27 @@ func (cms *cmdStore) nextCommand() (*Command, error) {
 		return &k, nil
 	}
 	
-	sl := make([]string,10)
+	sl := make([]string,1000)
 	i:=0
 	for h, _ := range cms.hosts {
 		hostname = h
 		log.Debug("host :", hostname)
 		sl[i]=hostname
 		i++
-		if i== 10 {
-			err = c.Find(bson.M{"accessed":unknown, 
+		if i== 30 {
+		err = c.Find(bson.M{"accessed":unknown, 
 					"deep":bson.M{"$lt":*max_visit_deep},
 					"host":bson.M{"$in":sl}}).
-					Limit(10).
+					Limit(1000).
 					All(&cmds)
-			if err != nil {
-				log.Errorf("find err=%v, sl=%v", err, sl)
-			} else {
+
+					
+			if err == nil || len(cmds) > 0 {
 				break
 			}
+			log.Errorf("find err=%v, sl=%v", err, sl)
 			i=0
 		}
-		/*
-		if len(hostname) > 0 {
-			//err = c.Find(bson.M{"accessed": unknown, "host": hostname}).One(&cmd)
-			err = c.Find(bson.M{"accessed": unknown, "host":hostname}).One(&cmd)
-		} else {
-			err = c.Find(bson.M{"accessed": unknown}).One(&cmd)
-		}*/
-
 	}
 
 	for _,v := range cmds{
