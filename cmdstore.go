@@ -2,9 +2,11 @@ package main
 
 import (
 	"fmt"
+	"math/rand"
 	log "github.com/Sirupsen/logrus"
 	"gopkg.in/mgo.v2"
 	"gopkg.in/mgo.v2/bson"
+	info "github.com/moris351/scraper/info"
 )
 
 const (
@@ -22,7 +24,11 @@ const (
 	failed
 )
 
-type Command struct {
+const (
+	cmdQueueLen = 1000
+	hostBatchNum = 30
+)
+/*type Command struct {
 	Source   string
 	Host     string
 	Url      string
@@ -30,23 +36,24 @@ type Command struct {
 	Deep     int
 }
 
+type VisitStat struct {
+	Req int
+	Success int
+	Failed	int
+}
 type VisitLog struct {
 	Url         string
 	Title       string
 	Description string
 }
-
+*/
 type cmdStore struct {
 	session *mgo.Session
 	db      *mgo.Database
 	hosts   map[string]int
-	cmdQue	chan Command
+	cmdQue	chan info.Command
 }
 
-type Host struct {
-	Hostname string
-	UrlNum   int
-}
 
 func newCmdStore(dbName string) *cmdStore {
 	cms := new(cmdStore)
@@ -91,11 +98,11 @@ func newCmdStore(dbName string) *cmdStore {
 
 	cms.hosts = make(map[string]int)
 
-	cms.cmdQue = make(chan Command,1000)
+	cms.cmdQue = make(chan info.Command,cmdQueueLen)
 
 	c = cms.db.C(hostsCol)
 
-	var results []Host
+	var results []info.Host
 	c.Find(nil).All(&results)
 
 	for _, h := range results {
@@ -112,7 +119,7 @@ func newCmdStore(dbName string) *cmdStore {
 	return cms
 }
 
-func (cms *cmdStore) addCommand(cmd *Command) error {
+func (cms *cmdStore) addCommand(cmd *info.Command) error {
 	c := cms.db.C(cmdCol)
 	err := c.Insert(cmd)
 	//err:=c.Insert(&Command{Source:"test",Url:"tttt",Accessed:111})
@@ -124,18 +131,19 @@ func (cms *cmdStore) addCommand(cmd *Command) error {
 	c = cms.db.C(hostsCol)
 
 	//err = c.Find(Bson.M{"host":cmd.Host}).All(
-	err = c.Insert(&Host{Hostname: cmd.Host, UrlNum: 0})
+	err = c.Insert(&info.Host{Hostname: cmd.Host, UrlNum: 0})
 
 	cms.hosts[cmd.Host]++
 
 	return err
 }
 
-func (cms *cmdStore) nextCommand() (*Command, error) {
+	
+func (cms *cmdStore) nextCommand() (*info.Command, error) {
 	c := cms.db.C(cmdCol)
 	//query:=fmt.Sprintf("{accessed:%d}",unknown)
 	//log.Debug("query=",query)
-	var cmds []Command
+	var cmds []info.Command
 	var hostname string
 	var err error
 	if len(cms.hosts) == 0 {
@@ -149,18 +157,18 @@ func (cms *cmdStore) nextCommand() (*Command, error) {
 		return &k, nil
 	}
 	
-	sl := make([]string,1000)
+	sl := make([]string,cmdQueueLen)
 	i:=0
 	for h, _ := range cms.hosts {
 		hostname = h
 		log.Debug("host :", hostname)
 		sl[i]=hostname
 		i++
-		if i== 30 {
+		if i== hostBatchNum {
 		err = c.Find(bson.M{"accessed":unknown, 
 					"deep":bson.M{"$lt":*max_visit_deep},
 					"host":bson.M{"$in":sl}}).
-					Limit(1000).
+					Limit(cmdQueueLen).
 					All(&cmds)
 
 					
@@ -172,9 +180,11 @@ func (cms *cmdStore) nextCommand() (*Command, error) {
 		}
 	}
 
-	for _,v := range cmds{
-		log.Infof("cms.cmdQue ,v=%v", v)
-		cms.cmdQue<-v
+	perm := rand.Perm(cmdQueueLen)
+	for _,v := range perm{
+		log.Infof("cms.cmdQue[%d]=%v", v, cmds[v])
+
+		cms.cmdQue<-cmds[v]
 	}
 	v:=<-cms.cmdQue	
 	return &v, nil
@@ -191,12 +201,15 @@ func (cms *cmdStore) updateCommand(url string) error {
 	return err
 }
 
-func (cms *cmdStore) visitLog(vl *VisitLog) error {
+func (cms *cmdStore) visitLog(vl *info.VisitLog) error {
 	c := cms.db.C(visitCol)
 	err := c.Insert(vl)
 	if err != nil {
 		log.Debug("visitLog insert err:", err)
 	}
+	
+	log.Info("visitlog:",vl)
+
 	return err
 }
 

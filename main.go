@@ -17,6 +17,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+	_ "encoding/json"
+	info "github.com/moris351/scraper/info"
 )
 
 const (
@@ -34,9 +36,11 @@ var (
 )
 
 var (
-	inQ  chan *Command  = make(chan *Command, 1)
-	outQ chan *Command  = make(chan *Command, 1)
-	logQ chan *VisitLog = make(chan *VisitLog, 1)
+	inQ  chan *info.Command  = make(chan *info.Command, 1)
+	outQ chan *info.Command  = make(chan *info.Command, 1)
+	logQ chan *info.VisitLogInfo = make(chan *info.VisitLogInfo, 1)
+	errQ chan interface{} =make(chan interface{})
+
 )
 
 type zmqTool struct {
@@ -120,14 +124,14 @@ func main() {
 	strs := strings.Split(string(urls), "\n")
 
 	cms := newCmdStore(dbName)
-	go parseQueue(cms)
+	go parseQueue(cms, zt)
 
 	for _, str := range strs {
 		if len(str) > 0 {
 			u, err := url.Parse(str)
 			if err == nil {
 
-				cmd := &Command{Source: "",
+				cmd := &info.Command{Source: "",
 					Host:     rootHostname(u.Hostname()),
 					Url:      u.String(),
 					Accessed: unknown,
@@ -143,10 +147,16 @@ func main() {
 
 	log.Debug("end of main")
 }
-func parseQueue(cms *cmdStore) {
+func parseQueue(cms *cmdStore, zt *zmqTool) {
 
-	var outCmd *Command
+	var outCmd *info.Command
 	var err error
+	var vsi info.VisitStatInfo
+	vsi.InfoType = info.Stat
+
+	ticker := time.NewTicker(3*time.Second)
+	defer ticker.Stop()
+
 	for {
 		if outCmd == nil {
 			log.Debug("outCmd == nil")
@@ -172,10 +182,26 @@ func parseQueue(cms *cmdStore) {
 		case outQ <- outCmd:
 			log.Debug("outQ<-outCmd,outCmd=", outCmd)
 			cms.updateCommand(outCmd.Url)
+			vsi.Msg.Req++
 			outCmd = nil
-		case vl := <-logQ:
-			log.Debug("vl:=<-log,vl=", vl)
-			cms.visitLog(vl)
+		case <-errQ:
+			vsi.Msg.Failed++
+			//log.Debug("vl:=<-log,vl=", vl)
+		case <-ticker.C:
+			b,err:=info.Marshal(vsi)
+			if err == nil {
+				zt.sender.Send(b,0)
+			}
+		case vli := <-logQ:
+			log.Debug("vli:=<-log,vli=", vli)
+			vsi.Msg.Success++
+			cms.visitLog(&vli.Msg)
+			
+			b,err:=info.Marshal(vli)
+			if err == nil {
+				zt.sender.Send(b,0)
+			}
+			//zt.sender.Send(vl.String(), 0)
 		}
 
 	}
@@ -223,6 +249,8 @@ func handler(zt *zmqTool, wg *sync.WaitGroup) {
 
 		if err != nil {
 			log.Errorf("error message: %s", err)
+
+			errQ<-nil
 			continue
 		}
 		v := resp.Header.Get("Content-Type")
@@ -235,6 +263,7 @@ func handler(zt *zmqTool, wg *sync.WaitGroup) {
 			vd = cs[1]
 		} else {
 			log.Errorf("wrong charset,%s,  can not process, continue",v)
+			errQ<-nil
 			continue
 		}
 		// Convert the designated charset HTML to utf-8 encoded HTML.
@@ -243,6 +272,7 @@ func handler(zt *zmqTool, wg *sync.WaitGroup) {
 		if err != nil {
 			// handler error
 			log.Error("iconv.NewReader return err=", err)
+			errQ<-nil
 			continue
 		}
 
@@ -251,6 +281,7 @@ func handler(zt *zmqTool, wg *sync.WaitGroup) {
 		if err != nil {
 			//log.Debug("[ERR] %s %s - %s\n", ctx.Cmd.Method(), ctx.Cmd.URL(), err)
 			log.Error("goquery.NewDocumentFromResponse err=", err)
+			errQ<-nil
 			continue
 		}
 
@@ -260,9 +291,15 @@ func handler(zt *zmqTool, wg *sync.WaitGroup) {
 		title := doc.Find("html title").Text()
 
 		log.WithFields(log.Fields{"title": title, "description": description}).Info("content received")
-		vl := &VisitLog{u.String(), title, description}
+		//vli := &info.VisitLogInfo{info.Log,{u.String(), title,description,},}
+		vli := new(info.VisitLogInfo)
+		
+		vli.InfoType = info.Log
+		vli.Msg.Url=u.String()
+		vli.Msg.Title=title
+		vli.Msg.Description=description
 
-		logQ <- vl
+		logQ <- vli
 		if cmd.Deep >= *max_visit_deep {
 			continue
 		}
@@ -287,7 +324,7 @@ func handler(zt *zmqTool, wg *sync.WaitGroup) {
 			if rh == cmd.Host {
 				deep = cmd.Deep + 1
 			}
-			inQ <- &Command{cmd.Url,
+			inQ <- &info.Command{cmd.Url,
 				rh,
 				ss,
 				unknown,
@@ -295,8 +332,6 @@ func handler(zt *zmqTool, wg *sync.WaitGroup) {
 			//zt.sender.Send(cmd.Url,0)
 		})
 
-		//zt.sender.Send(string(content), 0)
-		//log.Debug("resp:%s\n",content)
 		resp.Body.Close()
 		time.Sleep(time.Millisecond)
 	}
