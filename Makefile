@@ -4,12 +4,17 @@ OUTPUT=scraper
 GITTAG=`git describe --tags`
 BUILD_TIME=`date +%FT%T%z`
 # Setup the -ldflags option for go build here, interpolate the variable values
-ifdef withversion
-	LDFLAGS=-ldflags "-X main.GitTag=${GITTAG} -X main.BuildTime=${BUILD_TIME}"
-else
-	LDFLAGS=
+
+VERTAG=
+ifdef vertag
+	ifeq (${vertag},fromgit)
+		VERTAG=${GITTAG}
+	else 
+		VERTAG=${vertag}
+	endif
 endif
 
+LDFLAGS=-ldflags "-X main.VerTag=${VERTAG} -X main.BuildTime=${BUILD_TIME}"
 all:
 	go build ${LDFLAGS} -o ${OUTPUT} main.go cmdstore.go
 

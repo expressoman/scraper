@@ -51,10 +51,10 @@ var (
 )
 
 var (
-	inQ  chan *info.Command  = make(chan *info.Command, 1)
-	outQ chan *info.Command  = make(chan *info.Command, 1)
-	logQ chan *info.VisitLogInfo = make(chan *info.VisitLogInfo, 1)
-	errQ chan interface{} =make(chan interface{})
+	inQue  chan *info.Command  = make(chan *info.Command, 1)
+	outQue chan *info.Command  = make(chan *info.Command, 1)
+	logQue chan *info.VisitLogInfo = make(chan *info.VisitLogInfo, 1)
+	errQue chan interface{} =make(chan interface{})
 
 )
 
@@ -81,13 +81,13 @@ func (zt *zmqTool) close() {
 }
 
 var (
-	GitTag string   
+	VerTag string   
 	BuildTime string
 )
 
 func main() {
 	flag.Parse()
-	fmt.Println("Git Tag: " + GitTag)
+	fmt.Println("Version Tag: " + VerTag)
 	fmt.Println("Build Time: " + BuildTime)
 	
 	if *version {
@@ -164,7 +164,7 @@ func main() {
 					Deep:     0}
 
 				log.Debug("cmd=", cmd)
-				inQ <- cmd
+				inQue <- cmd
 			}
 		}
 	}
@@ -194,7 +194,7 @@ func parseQueue(cms *cmdStore, zt *zmqTool) {
 				//should be not found err ontinue
 				log.Warnln("should not be found here")
 
-				incmd := <-inQ
+				incmd := <-inQue
 				//cms.updateCommand(incmd.Url)
 				log.Debug("incmd=", incmd)
 				cms.addCommand(incmd)
@@ -206,16 +206,16 @@ func parseQueue(cms *cmdStore, zt *zmqTool) {
 		}
 		log.Debugln("goroutine num=",runtime.NumGoroutine())
 		select {
-		case incmd := <-inQ:
+		case incmd := <-inQue:
 			//log.Debug("incmd=", incmd)
 			//cms.updateCommand(incmd.Url)
 			cms.addCommand(incmd)
-		case outQ <- outCmd:
-			log.Debug("outQ<-outCmd,outCmd=", outCmd)
+		case outQue <- outCmd:
+			log.Debug("outQue<-outCmd,outCmd=", outCmd)
 			cms.updateCommand(outCmd.Url)
 			vsi.Msg.Req++
 			outCmd = nil
-		case <-errQ:
+		case <-errQue:
 			vsi.Msg.Failed++
 			//log.Debug("vl:=<-log,vl=", vl)
 		case <-ticker.C:
@@ -223,7 +223,7 @@ func parseQueue(cms *cmdStore, zt *zmqTool) {
 			if err == nil {
 				zt.sender.Send(b,0)
 			}
-		case vli := <-logQ:
+		case vli := <-logQue:
 			log.Debug("vli:=<-log,vli=", vli)
 			vsi.Msg.Success++
 			cms.visitLog(&vli.Msg)
@@ -253,7 +253,7 @@ func rootHostname(hostname string) string {
 func handler(zt *zmqTool, wg *sync.WaitGroup) {
 	for {
 		log.Debug("before s:=<-q")
-		cmd := <-outQ
+		cmd := <-outQue
 		if cmd == nil {
 			log.Debug(" end of cmds ")
 			break
@@ -282,7 +282,7 @@ func handler(zt *zmqTool, wg *sync.WaitGroup) {
 		if err != nil {
 			log.Errorf("error message: %s", err)
 
-			errQ<-nil
+			errQue<-nil
 			continue
 		}
 		v := resp.Header.Get("Content-Type")
@@ -295,7 +295,7 @@ func handler(zt *zmqTool, wg *sync.WaitGroup) {
 			vd = cs[1]
 		} else {
 			log.Errorf("wrong charset,%s,  can not process, continue",v)
-			errQ<-nil
+			errQue<-nil
 			continue
 		}
 		// Convert the designated charset HTML to utf-8 encoded HTML.
@@ -304,7 +304,7 @@ func handler(zt *zmqTool, wg *sync.WaitGroup) {
 		if err != nil {
 			// handler error
 			log.Error("iconv.NewReader return err=", err)
-			errQ<-nil
+			errQue<-nil
 			scrProf.Remove(utfBody)
 			continue
 		}
@@ -315,7 +315,7 @@ func handler(zt *zmqTool, wg *sync.WaitGroup) {
 		if err != nil {
 			//log.Debug("[ERR] %s %s - %s\n", ctx.Cmd.Method(), ctx.Cmd.URL(), err)
 			log.Error("goquery.NewDocumentFromResponse err=", err)
-			errQ<-nil
+			errQue<-nil
 			scrProf.Remove(utfBody)
 			continue
 		}
@@ -334,7 +334,7 @@ func handler(zt *zmqTool, wg *sync.WaitGroup) {
 		vli.Msg.Title=title
 		vli.Msg.Description=description
 
-		logQ <- vli
+		logQue <- vli
 		if cmd.Deep >= *max_visit_deep {
 			scrProf.Remove(utfBody)
 			continue
@@ -360,7 +360,7 @@ func handler(zt *zmqTool, wg *sync.WaitGroup) {
 			if rh == cmd.Host {
 				deep = cmd.Deep + 1
 			}
-			inQ <- &info.Command{cmd.Url,
+			inQue <- &info.Command{cmd.Url,
 				rh,
 				ss,
 				unknown,
