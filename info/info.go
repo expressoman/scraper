@@ -56,7 +56,7 @@ type vsi struct {
 }
 
 func Unmarshal(str string)(IT, interface{}, error) {
-	log.Infoln("str=",str)
+	//log.Infoln("str=",str)
 	b := []byte(str)
 	var i vsi
 	err := json.Unmarshal(b, &i)
@@ -64,7 +64,7 @@ func Unmarshal(str string)(IT, interface{}, error) {
 		log.Error("json.Unmarshal err,", err)
 	}
 
-	log.Infof("i.Msg=%v, len=%d", i.Msg,len(i.Msg))
+	//log.Infof("i.Msg=%v, len=%d", i.Msg,len(i.Msg))
 	var dst interface{}
 
 	switch i.InfoType {
