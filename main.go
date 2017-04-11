@@ -47,6 +47,7 @@ var (
 	sconsole_addr  = flag.String("sconsole address", "localhost", "sconsole ip address")
 	debug_level    = flag.String("debug_level", "info", "debug level: debug, info, warning, error")
 	max_visit_deep = flag.Int("max_visit_deep", maxVisitDeep, "max visit deep")
+	version		   = flag.Bool("version", false, "version info")
 )
 
 var (
@@ -79,8 +80,19 @@ func (zt *zmqTool) close() {
 	zt.sender.Close()
 }
 
+var (
+	GitTag string   
+	BuildTime string
+)
+
 func main() {
 	flag.Parse()
+	fmt.Println("Git Tag: " + GitTag)
+	fmt.Println("Build Time: " + BuildTime)
+	
+	if *version {
+		return
+	}
 	// Log as JSON instead of the default ASCII formatter.
 	//log.SetFormatter(&log.JSONFormatter{})
 	log.SetFormatter(&log.TextFormatter{})
