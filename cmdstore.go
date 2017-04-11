@@ -158,6 +158,7 @@ func (cms *cmdStore) nextCommand() (*info.Command, error) {
 	}
 	
 	sl := make([]string,cmdQueueLen)
+	scrProf.Add(&sl,1)
 	i:=0
 	for h, _ := range cms.hosts {
 		hostname = h
@@ -187,6 +188,8 @@ func (cms *cmdStore) nextCommand() (*info.Command, error) {
 		cms.cmdQue<-cmds[v]
 	}
 	v:=<-cms.cmdQue	
+	scrProf.Remove(&sl)
+	
 	return &v, nil
 
 	//return cmds, err

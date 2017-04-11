@@ -19,7 +19,21 @@ import (
 	"time"
 	_ "encoding/json"
 	info "github.com/moris351/scraper/info"
+	_ "net/http/pprof"
+	"runtime/pprof"
+
 )
+
+var scrProf *pprof.Profile
+
+func init() {
+	profName := "scraper_profile"
+	scrProf = pprof.Lookup(profName)
+	if scrProf == nil {
+		scrProf = pprof.NewProfile(profName)
+	}
+}
+
 
 const (
 	receiverPort = ":5557"
@@ -143,8 +157,11 @@ func main() {
 		}
 	}
 
-	wg.Wait()
+	go func() {
+		log.Println(http.ListenAndServe(":6060", nil))
+	}()
 
+	wg.Wait()
 	log.Debug("end of main")
 }
 func parseQueue(cms *cmdStore, zt *zmqTool) {
@@ -173,7 +190,9 @@ func parseQueue(cms *cmdStore, zt *zmqTool) {
 				continue
 			}
 			log.Debugln("outCmd=", outCmd)
+			scrProf.Add(outCmd,1)
 		}
+		log.Debugln("goroutine num=",runtime.NumGoroutine())
 		select {
 		case incmd := <-inQ:
 			//log.Debug("incmd=", incmd)
@@ -204,6 +223,7 @@ func parseQueue(cms *cmdStore, zt *zmqTool) {
 			//zt.sender.Send(vl.String(), 0)
 		}
 
+		scrProf.Remove(outCmd)
 	}
 }
 
@@ -273,8 +293,10 @@ func handler(zt *zmqTool, wg *sync.WaitGroup) {
 			// handler error
 			log.Error("iconv.NewReader return err=", err)
 			errQ<-nil
+			scrProf.Remove(utfBody)
 			continue
 		}
+		scrProf.Add(utfBody,1)
 
 		//doc, err := goquery.NewDocumentFromResponse(resp)
 		doc, err := goquery.NewDocumentFromReader(utfBody)
@@ -282,6 +304,7 @@ func handler(zt *zmqTool, wg *sync.WaitGroup) {
 			//log.Debug("[ERR] %s %s - %s\n", ctx.Cmd.Method(), ctx.Cmd.URL(), err)
 			log.Error("goquery.NewDocumentFromResponse err=", err)
 			errQ<-nil
+			scrProf.Remove(utfBody)
 			continue
 		}
 
@@ -301,6 +324,7 @@ func handler(zt *zmqTool, wg *sync.WaitGroup) {
 
 		logQ <- vli
 		if cmd.Deep >= *max_visit_deep {
+			scrProf.Remove(utfBody)
 			continue
 		}
 		doc.Find("a[href]").Each(func(i int, s *goquery.Selection) {
@@ -331,6 +355,8 @@ func handler(zt *zmqTool, wg *sync.WaitGroup) {
 				deep}
 			//zt.sender.Send(cmd.Url,0)
 		})
+		
+		scrProf.Remove(utfBody)
 
 		resp.Body.Close()
 		time.Sleep(time.Millisecond)
