@@ -52,6 +52,7 @@ type cmdStore struct {
 	db      *mgo.Database
 	hosts   map[string]int
 	cmdQue	chan info.Command
+	sl		[cmdQueueLen]string
 }
 
 
@@ -100,6 +101,8 @@ func newCmdStore(dbName string) *cmdStore {
 
 	cms.cmdQue = make(chan info.Command,cmdQueueLen)
 
+	//cms.sl = make([]string,cmdQueueLen)
+
 	c = cms.db.C(hostsCol)
 
 	var results []info.Host
@@ -133,7 +136,7 @@ func (cms *cmdStore) addCommand(cmd *info.Command) error {
 	//err = c.Find(Bson.M{"host":cmd.Host}).All(
 	err = c.Insert(&info.Host{Hostname: cmd.Host, UrlNum: 0})
 
-	cms.hosts[cmd.Host]++
+	//cms.hosts[cmd.Host]++
 
 	return err
 }
@@ -157,18 +160,18 @@ func (cms *cmdStore) nextCommand() (*info.Command, error) {
 		return &k, nil
 	}
 	
-	sl := make([]string,cmdQueueLen)
-	scrProf.Add(&sl,1)
+	//sl := make([]string,cmdQueueLen)
+	//scrProf.Add(&sl,1)
 	i:=0
 	for h, _ := range cms.hosts {
 		hostname = h
 		log.Debug("host :", hostname)
-		sl[i]=hostname
+		cms.sl[i]=hostname
 		i++
 		if i== hostBatchNum {
 		err = c.Find(bson.M{"accessed":unknown, 
 					"deep":bson.M{"$lt":*max_visit_deep},
-					"host":bson.M{"$in":sl}}).
+					"host":bson.M{"$in":cms.sl}}).
 					Limit(cmdQueueLen).
 					All(&cmds)
 
@@ -176,7 +179,7 @@ func (cms *cmdStore) nextCommand() (*info.Command, error) {
 			if err == nil || len(cmds) > 0 {
 				break
 			}
-			log.Errorf("find err=%v, sl=%v", err, sl)
+			log.Errorf("find err=%v, cms.sl=%v", err, cms.sl)
 			i=0
 		}
 	}
@@ -188,7 +191,7 @@ func (cms *cmdStore) nextCommand() (*info.Command, error) {
 		cms.cmdQue<-cmds[v]
 	}
 	v:=<-cms.cmdQue	
-	scrProf.Remove(&sl)
+	//scrProf.Remove(&sl)
 	
 	return &v, nil
 

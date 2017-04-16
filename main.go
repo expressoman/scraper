@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"github.com/PuerkitoBio/goquery"
 	log "github.com/Sirupsen/logrus"
-	"github.com/djimenez/iconv-go"
+	_ "github.com/djimenez/iconv-go"
 	zmq "github.com/pebbe/zmq4"
 	_ "golang.org/x/net/html"
 	"io"
@@ -85,6 +85,10 @@ var (
 	BuildTime string
 )
 
+var cpuprofile = flag.String("cpuprofile", "", "write cpu profile to this file")
+var memprofile = flag.String("memprofile", "", "write memory profile to this file")
+
+
 func main() {
 	flag.Parse()
 	fmt.Println("Version Tag: " + VerTag)
@@ -93,7 +97,16 @@ func main() {
 	if *version {
 		return
 	}
-	// Log as JSON instead of the default ASCII formatter.
+	if *cpuprofile != "" {
+		f, err := os.Create(*cpuprofile)
+		if err != nil {
+			log.Fatal(err)
+		}
+		pprof.StartCPUProfile(f)
+		defer pprof.StopCPUProfile()
+	}
+
+// Log as JSON instead of the default ASCII formatter.
 	//log.SetFormatter(&log.JSONFormatter{})
 	log.SetFormatter(&log.TextFormatter{})
 
@@ -202,7 +215,7 @@ func parseQueue(cms *cmdStore, zt *zmqTool) {
 				continue
 			}
 			log.Debugln("outCmd=", outCmd)
-			scrProf.Add(outCmd,1)
+			//scrProf.Add(outCmd,1)
 		}
 		log.Debugln("goroutine num=",runtime.NumGoroutine())
 		select {
@@ -235,7 +248,7 @@ func parseQueue(cms *cmdStore, zt *zmqTool) {
 			//zt.sender.Send(vl.String(), 0)
 		}
 
-		scrProf.Remove(outCmd)
+		//scrProf.Remove(outCmd)
 	}
 }
 
@@ -251,7 +264,13 @@ func rootHostname(hostname string) string {
 	return v[l-2] + "." + v[l-1]
 }
 func handler(zt *zmqTool, wg *sync.WaitGroup) {
+	//zt.sender.Send("will visit "+u.String(), 0)
+	/*client := http.Client{
+		Timeout: time.Duration(15 * time.Second),
+	}*/
+
 	for {
+
 		log.Debug("before s:=<-q")
 		cmd := <-outQue
 		if cmd == nil {
@@ -263,29 +282,38 @@ func handler(zt *zmqTool, wg *sync.WaitGroup) {
 		u, err := url.Parse(cmd.Url)
 		if err != nil {
 			log.Errorln("url.Parse err, ", err)
+			continue
 		}
-		//zt.sender.Send("will visit "+u.String(), 0)
-		client := http.Client{
-			Timeout: time.Duration(15 * time.Second),
-		}
-
 		//client := http.Client{}
 
 		//log..Info("processing, url=",u.String())
 		log.WithFields(log.Fields{
 			"url": u.String(),
 		}).Info("processing")
-
+/*
 		resp, err := client.Get(u.String())
 		//defer resp.Body.Close()
 
 		if err != nil {
 			log.Errorf("error message: %s", err)
-
+			if resp != nil {resp.Body.Close()}
 			errQue<-nil
 			continue
 		}
-		v := resp.Header.Get("Content-Type")
+		if err != nil {
+			log.Printf("http.NewRequest failed, err=", err)
+		*/
+
+		req, err := http.NewRequest("GET", u.String(),nil)	
+		req.Close = true
+		resp,err := http.DefaultClient.Do(req)
+		if err != nil {
+			log.Printf("http.NDefaultClient failed, err=", err)
+			continue
+		}
+
+
+		/*v := resp.Header.Get("Content-Type")
 		log.WithFields(log.Fields{"charset": v}).Debug("charset")
 
 		cs := strings.Split(v, "=")
@@ -295,6 +323,7 @@ func handler(zt *zmqTool, wg *sync.WaitGroup) {
 			vd = cs[1]
 		} else {
 			log.Errorf("wrong charset,%s,  can not process, continue",v)
+			resp.Body.Close()
 			errQue<-nil
 			continue
 		}
@@ -304,19 +333,21 @@ func handler(zt *zmqTool, wg *sync.WaitGroup) {
 		if err != nil {
 			// handler error
 			log.Error("iconv.NewReader return err=", err)
+			resp.Body.Close()
 			errQue<-nil
-			scrProf.Remove(utfBody)
+			//scrProf.Remove(utfBody)
 			continue
 		}
-		scrProf.Add(utfBody,1)
-
-		//doc, err := goquery.NewDocumentFromResponse(resp)
-		doc, err := goquery.NewDocumentFromReader(utfBody)
+		//scrProf.Add(utfBody,1)
+*/
+		doc, err := goquery.NewDocumentFromResponse(resp)
+		//doc, err := goquery.NewDocumentFromReader(utfBody)
 		if err != nil {
 			//log.Debug("[ERR] %s %s - %s\n", ctx.Cmd.Method(), ctx.Cmd.URL(), err)
 			log.Error("goquery.NewDocumentFromResponse err=", err)
+			resp.Body.Close()
 			errQue<-nil
-			scrProf.Remove(utfBody)
+			//scrProf.Remove(utfBody)
 			continue
 		}
 
@@ -335,8 +366,11 @@ func handler(zt *zmqTool, wg *sync.WaitGroup) {
 		vli.Msg.Description=description
 
 		logQue <- vli
+		
+		
 		if cmd.Deep >= *max_visit_deep {
-			scrProf.Remove(utfBody)
+			//scrProf.Remove(utfBody)
+			resp.Body.Close()
 			continue
 		}
 		doc.Find("a[href]").Each(func(i int, s *goquery.Selection) {
@@ -368,9 +402,19 @@ func handler(zt *zmqTool, wg *sync.WaitGroup) {
 			//zt.sender.Send(cmd.Url,0)
 		})
 		
-		scrProf.Remove(utfBody)
+		//scrProf.Remove(utfBody)
 
 		resp.Body.Close()
+		if *memprofile != "" {
+			f, err := os.Create(*memprofile)
+			if err != nil {
+					log.Fatal(err)
+				}
+				pprof.WriteHeapProfile(f)
+				f.Close()
+				os.Exit(0)
+		}
+
 		time.Sleep(time.Millisecond)
 	}
 
