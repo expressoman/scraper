@@ -36,8 +36,8 @@ func init() {
 
 
 const (
-	receiverPort = ":5557"
-	senderPort   = ":5558"
+	logstatPort = ":5557"
+	cmdPort   = ":5558"
 	maxVisitDeep = 5
 )
 
@@ -66,13 +66,14 @@ type zmqTool struct {
 func newZmqTool() *zmqTool {
 	zt := new(zmqTool)
 	//var err error
-	zt.sender, _ = zmq.NewSocket(zmq.PUSH)
+	zt.sender, _ = zmq.NewSocket(zmq.PUB)
 	//defer sender.Close()
-	zt.sender.Connect("tcp://" + *sconsole_addr + receiverPort)
+	zt.sender.Bind("tcp://*" + logstatPort)
+	//zt.sender.Bind("ipc://logstat.ipc")
 
 	zt.receiver, _ = zmq.NewSocket(zmq.PULL)
 	//defer receiver.Close()
-	zt.receiver.Connect("tcp://" + *sconsole_addr + senderPort)
+	zt.receiver.Connect("tcp://" + *sconsole_addr + cmdPort)
 	return zt
 }
 func (zt *zmqTool) close() {
