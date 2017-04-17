@@ -8,7 +8,6 @@ import (
 	_ "github.com/djimenez/iconv-go"
 	zmq "github.com/pebbe/zmq4"
 	_ "golang.org/x/net/html"
-	"io"
 	"io/ioutil"
 	"net/http"
 	"net/url"
@@ -17,6 +16,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"strconv"
 	_ "encoding/json"
 	info "github.com/moris351/scraper/info"
 	_ "net/http/pprof"
@@ -106,38 +106,8 @@ func main() {
 		defer pprof.StopCPUProfile()
 	}
 
-// Log as JSON instead of the default ASCII formatter.
-	//log.SetFormatter(&log.JSONFormatter{})
-	log.SetFormatter(&log.TextFormatter{})
-
-	// Output to stdout instead of the default stderr
-	// Can be any io.Writer, see below for File example
-	log.SetOutput(os.Stdout)
-	file, err := os.OpenFile("scraper.log", os.O_CREATE|os.O_RDWR|os.O_TRUNC, 0666)
-	if err == nil {
-		//	log.SetOutput(file)
-		log.SetOutput(io.MultiWriter(file, os.Stdout))
-
-	} else {
-		log.Fatal("Failed to log to file, using default stderr")
-	}
-
-	defer file.Close()
-	// Only log the warning severity or above.
-	fmt.Printf(*debug_level)
-	var l log.Level
-	switch *debug_level {
-	case "debug":
-		l = log.DebugLevel
-	case "info":
-		l = log.InfoLevel
-	case "warn":
-		l = log.WarnLevel
-	case "error":
-		l = log.ErrorLevel
-	}
-
-	log.SetLevel(l)
+	lb := newLogBot()
+	defer lb.close()
 
 	zt := newZmqTool()
 	defer zt.close()
@@ -269,9 +239,11 @@ func handler(zt *zmqTool, wg *sync.WaitGroup) {
 		Timeout: time.Duration(15 * time.Second),
 	}*/
 
+	gid:=GoID()
+
 	for {
 
-		log.Debug("before s:=<-q")
+		log.Debugf("[G:%d]before s:=<-q",gid)
 		cmd := <-outQue
 		if cmd == nil {
 			log.Debug(" end of cmds ")
@@ -305,8 +277,11 @@ func handler(zt *zmqTool, wg *sync.WaitGroup) {
 		*/
 
 		req, err := http.NewRequest("GET", u.String(),nil)	
-		req.Close = true
-		resp,err := http.DefaultClient.Do(req)
+		req.Close = true	
+		client := http.Client{
+			Timeout: time.Duration(15 * time.Second),
+		}
+		resp,err := client.Do(req)
 		if err != nil {
 			log.Printf("http.NDefaultClient failed, err=", err)
 			continue
@@ -422,3 +397,15 @@ func handler(zt *zmqTool, wg *sync.WaitGroup) {
 	log.Debug("after wg.Done")
 
 }
+
+func GoID() int {
+    var buf [64]byte
+    n := runtime.Stack(buf[:], false)
+    idField := strings.Fields(strings.TrimPrefix(string(buf[:n]), "goroutine "))[0]
+    id, err := strconv.Atoi(idField)
+    if err != nil {
+        panic(fmt.Sprintf("cannot get goroutine id: %v", err))
+    }
+    return id
+}
+

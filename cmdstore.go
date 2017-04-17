@@ -136,7 +136,7 @@ func (cms *cmdStore) addCommand(cmd *info.Command) error {
 	//err = c.Find(Bson.M{"host":cmd.Host}).All(
 	err = c.Insert(&info.Host{Hostname: cmd.Host, UrlNum: 0})
 
-	//cms.hosts[cmd.Host]++
+	cms.hosts[cmd.Host]++
 
 	return err
 }
