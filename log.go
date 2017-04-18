@@ -4,26 +4,25 @@ import (
 	log "github.com/Sirupsen/logrus"
 	"gopkg.in/natefinch/lumberjack.v2"
 
-	"io"
 	"fmt"
+	"io"
 	"os"
+	"os/signal"
+	"syscall"
 	_ "time"
-    "syscall"
-    "os/signal"
-
 )
 
-const(
-	filename ="scraper.log"
-	rotate = 10
+const (
+	filename = "scraper.log"
+	rotate   = 10
 )
 
-type logBot struct{
+type logBot struct {
 	file *os.File
-	ch chan os.Signal
+	ch   chan os.Signal
 }
 
-func newLogBot() *logBot{
+func newLogBot() *logBot {
 	// Log as JSON instead of the default ASCII formatter.
 	//log.SetFormatter(&log.JSONFormatter{})
 	log.SetFormatter(&log.TextFormatter{})
@@ -34,24 +33,24 @@ func newLogBot() *logBot{
 
 	lb := new(logBot)
 	log.SetOutput(io.MultiWriter(&lumberjack.Logger{
-	    Filename:   filename,
-	    MaxSize:    30, // megabytes
-	    MaxBackups: 30,
-	    MaxAge:     28, //days
-	},os.Stdout))
+		Filename:   "log/" + filename,
+		MaxSize:    30, // megabytes
+		MaxBackups: 30,
+		MaxAge:     28, //days
+	}, os.Stdout))
 
-/*
-	var err error
-	lb.file, err = os.OpenFile(fno, os.O_CREATE|os.O_RDWR|os.O_TRUNC, 0666)
-	if err == nil {
-		//	log.SetOutput(file)
-		log.SetOutput(io.MultiWriter(lb.file, os.Stdout))
+	/*
+		var err error
+		lb.file, err = os.OpenFile(fno, os.O_CREATE|os.O_RDWR|os.O_TRUNC, 0666)
+		if err == nil {
+			//	log.SetOutput(file)
+			log.SetOutput(io.MultiWriter(lb.file, os.Stdout))
 
-	} else {
-		log.Fatal("Failed to log to file, using default stderr")
-	}
-*/
-// Only log the warning severity or above.
+		} else {
+			log.Fatal("Failed to log to file, using default stderr")
+		}
+	*/
+	// Only log the warning severity or above.
 	fmt.Printf(*debug_level)
 	var l log.Level
 	switch *debug_level {
@@ -67,26 +66,25 @@ func newLogBot() *logBot{
 
 	log.SetLevel(l)
 
-	lb.ch = make( chan os.Signal)
-//	signal.Notify(lb.ch, syscall.SIGUSR1,syscall.SIGINT,syscall.SIGTERM)
+	lb.ch = make(chan os.Signal)
+	//	signal.Notify(lb.ch, syscall.SIGUSR1,syscall.SIGINT,syscall.SIGTERM)
 	signal.Notify(lb.ch, syscall.SIGUSR1)
-/*
-	go func (){
-		s:=<-lb.ch
-		fmt.Printf("signal : %v",s)
-		lb.reset()
-	}()
-*/
+	/*
+		go func (){
+			s:=<-lb.ch
+			fmt.Printf("signal : %v",s)
+			lb.reset()
+		}()
+	*/
 
 	return lb
 }
 
-func (lb *logBot) close(){
+func (lb *logBot) close() {
 	lb.file.Close()
 }
 
-
-func (lb *logBot) reset(){
+func (lb *logBot) reset() {
 	lb.file.Close()
 	var err error
 	lb.file, err = os.OpenFile(filename, os.O_CREATE|os.O_RDWR|os.O_TRUNC, 0666)
@@ -99,10 +97,7 @@ func (lb *logBot) reset(){
 	}
 }
 
-
-
-func (lb *logBot) Debug(){
+func (lb *logBot) Debug() {
 	log.Debug("tet")
 
 }
-

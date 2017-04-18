@@ -1,27 +1,26 @@
 package main
 
 import (
+	_ "encoding/json"
 	"flag"
 	"fmt"
 	"github.com/PuerkitoBio/goquery"
 	log "github.com/Sirupsen/logrus"
-	_ "github.com/djimenez/iconv-go"
+	"github.com/djimenez/iconv-go"
+	info "github.com/moris351/scraper/info"
 	zmq "github.com/pebbe/zmq4"
 	_ "golang.org/x/net/html"
 	"io/ioutil"
 	"net/http"
+	_ "net/http/pprof"
 	"net/url"
 	"os"
 	"runtime"
+	"runtime/pprof"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
-	"strconv"
-	_ "encoding/json"
-	info "github.com/moris351/scraper/info"
-	_ "net/http/pprof"
-	"runtime/pprof"
-
 )
 
 var scrProf *pprof.Profile
@@ -34,10 +33,9 @@ func init() {
 	}
 }
 
-
 const (
-	logstatPort = ":5557"
-	cmdPort   = ":5558"
+	logstatPort  = ":5557"
+	cmdPort      = ":5558"
 	maxVisitDeep = 5
 )
 
@@ -47,15 +45,14 @@ var (
 	sconsole_addr  = flag.String("sconsole address", "localhost", "sconsole ip address")
 	debug_level    = flag.String("debug_level", "info", "debug level: debug, info, warning, error")
 	max_visit_deep = flag.Int("max_visit_deep", maxVisitDeep, "max visit deep")
-	version		   = flag.Bool("version", false, "version info")
+	version        = flag.Bool("version", false, "version info")
 )
 
 var (
-	inQue  chan *info.Command  = make(chan *info.Command, 1)
-	outQue chan *info.Command  = make(chan *info.Command, 1)
+	inQue  chan *info.Command      = make(chan *info.Command, 1)
+	outQue chan *info.Command      = make(chan *info.Command, 1)
 	logQue chan *info.VisitLogInfo = make(chan *info.VisitLogInfo, 1)
-	errQue chan interface{} =make(chan interface{})
-
+	errQue chan interface{}        = make(chan interface{})
 )
 
 type zmqTool struct {
@@ -82,19 +79,18 @@ func (zt *zmqTool) close() {
 }
 
 var (
-	VerTag string   
+	VerTag    string
 	BuildTime string
 )
 
 var cpuprofile = flag.String("cpuprofile", "", "write cpu profile to this file")
 var memprofile = flag.String("memprofile", "", "write memory profile to this file")
 
-
 func main() {
 	flag.Parse()
 	fmt.Println("Version Tag: " + VerTag)
 	fmt.Println("Build Time: " + BuildTime)
-	
+
 	if *version {
 		return
 	}
@@ -167,7 +163,7 @@ func parseQueue(cms *cmdStore, zt *zmqTool) {
 	var vsi info.VisitStatInfo
 	vsi.InfoType = info.Stat
 
-	ticker := time.NewTicker(3*time.Second)
+	ticker := time.NewTicker(3 * time.Second)
 	defer ticker.Stop()
 
 	for {
@@ -188,7 +184,7 @@ func parseQueue(cms *cmdStore, zt *zmqTool) {
 			log.Debugln("outCmd=", outCmd)
 			//scrProf.Add(outCmd,1)
 		}
-		log.Debugln("goroutine num=",runtime.NumGoroutine())
+		log.Debugln("goroutine num=", runtime.NumGoroutine())
 		select {
 		case incmd := <-inQue:
 			//log.Debug("incmd=", incmd)
@@ -203,18 +199,18 @@ func parseQueue(cms *cmdStore, zt *zmqTool) {
 			vsi.Msg.Failed++
 			//log.Debug("vl:=<-log,vl=", vl)
 		case <-ticker.C:
-			b,err:=info.Marshal(vsi)
+			b, err := info.Marshal(vsi)
 			if err == nil {
-				zt.sender.Send(b,0)
+				zt.sender.Send(b, 0)
 			}
 		case vli := <-logQue:
 			log.Debug("vli:=<-log,vli=", vli)
 			vsi.Msg.Success++
 			cms.visitLog(&vli.Msg)
-			
-			b,err:=info.Marshal(vli)
+
+			b, err := info.Marshal(vli)
 			if err == nil {
-				zt.sender.Send(b,0)
+				zt.sender.Send(b, 0)
 			}
 			//zt.sender.Send(vl.String(), 0)
 		}
@@ -234,17 +230,33 @@ func rootHostname(hostname string) string {
 	}
 	return v[l-2] + "." + v[l-1]
 }
+/*
+func iconv(source io.Reader, fromEncoding string, toEncoding string) (*iconv.Reader, error) {
+	// create a converter
+	converter, err := iconv.NewConverter(fromEncoding, toEncoding)
+
+	if err == nil {
+		reader := iconv.NewReaderFromConverter(source, converter)
+		converter.Close()
+		return reader, err
+	}
+
+	// return the error
+	return nil, err
+}*/
+
+
 func handler(zt *zmqTool, wg *sync.WaitGroup) {
 	//zt.sender.Send("will visit "+u.String(), 0)
 	/*client := http.Client{
 		Timeout: time.Duration(15 * time.Second),
 	}*/
 
-	gid:=GoID()
+	gid := GoID()
 
 	for {
 
-		log.Debugf("[G:%d]before s:=<-q",gid)
+		log.Debugf("[G:%d]before s:=<-q", gid)
 		cmd := <-outQue
 		if cmd == nil {
 			log.Debug(" end of cmds ")
@@ -255,6 +267,7 @@ func handler(zt *zmqTool, wg *sync.WaitGroup) {
 		u, err := url.Parse(cmd.Url)
 		if err != nil {
 			log.Errorln("url.Parse err, ", err)
+			errQue<-nil
 			continue
 		}
 		//client := http.Client{}
@@ -263,33 +276,33 @@ func handler(zt *zmqTool, wg *sync.WaitGroup) {
 		log.WithFields(log.Fields{
 			"url": u.String(),
 		}).Info("processing")
-/*
-		resp, err := client.Get(u.String())
-		//defer resp.Body.Close()
+		/*
+			resp, err := client.Get(u.String())
+			//defer resp.Body.Close()
 
-		if err != nil {
-			log.Errorf("error message: %s", err)
-			if resp != nil {resp.Body.Close()}
-			errQue<-nil
-			continue
-		}
-		if err != nil {
-			log.Printf("http.NewRequest failed, err=", err)
+			if err != nil {
+				log.Errorf("error message: %s", err)
+				if resp != nil {resp.Body.Close()}
+				errQue<-nil
+				continue
+			}
+			if err != nil {
+				log.Printf("http.NewRequest failed, err=", err)
 		*/
 
-		req, err := http.NewRequest("GET", u.String(),nil)	
-		req.Close = true	
+		req, err := http.NewRequest("GET", u.String(), nil)
+		req.Close = true
 		client := http.Client{
 			Timeout: time.Duration(15 * time.Second),
 		}
-		resp,err := client.Do(req)
+		resp, err := client.Do(req)
 		if err != nil {
-			log.Printf("http.NDefaultClient failed, err=", err)
+			log.Printf("http.DefaultClient failed, err=", err)
+			errQue<-nil
 			continue
 		}
 
-
-		/*v := resp.Header.Get("Content-Type")
+		v := resp.Header.Get("Content-Type")
 		log.WithFields(log.Fields{"charset": v}).Debug("charset")
 
 		cs := strings.Split(v, "=")
@@ -315,17 +328,19 @@ func handler(zt *zmqTool, wg *sync.WaitGroup) {
 			continue
 		}
 		//scrProf.Add(utfBody,1)
-*/
-		doc, err := goquery.NewDocumentFromResponse(resp)
-		//doc, err := goquery.NewDocumentFromReader(utfBody)
+		
+		//doc, err := goquery.NewDocumentFromResponse(resp)
+		doc, err := goquery.NewDocumentFromReader(utfBody)
 		if err != nil {
 			//log.Debug("[ERR] %s %s - %s\n", ctx.Cmd.Method(), ctx.Cmd.URL(), err)
 			log.Error("goquery.NewDocumentFromResponse err=", err)
+			utfBody.Close()
 			resp.Body.Close()
-			errQue<-nil
+			errQue <- nil
 			//scrProf.Remove(utfBody)
 			continue
 		}
+		utfBody.Close()
 
 		description, _ := doc.Find("head meta[name='description']").Attr("content")
 		//log.Debugf("description=%s", description)
@@ -335,15 +350,14 @@ func handler(zt *zmqTool, wg *sync.WaitGroup) {
 		log.WithFields(log.Fields{"title": title, "description": description}).Info("content received")
 		//vli := &info.VisitLogInfo{info.Log,{u.String(), title,description,},}
 		vli := new(info.VisitLogInfo)
-		
+
 		vli.InfoType = info.Log
-		vli.Msg.Url=u.String()
-		vli.Msg.Title=title
-		vli.Msg.Description=description
+		vli.Msg.Url = u.String()
+		vli.Msg.Title = title
+		vli.Msg.Description = description
 
 		logQue <- vli
-		
-		
+
 		if cmd.Deep >= *max_visit_deep {
 			//scrProf.Remove(utfBody)
 			resp.Body.Close()
@@ -354,7 +368,7 @@ func handler(zt *zmqTool, wg *sync.WaitGroup) {
 			//log.Debug("doc.find: val=%s\n", val)
 			u, err := u.Parse(val)
 			if err != nil {
-				log.Errorf("parse failed, href=%s, err=%v",val,err)
+				log.Errorf("parse failed, href=%s, err=%v", val, err)
 				return
 			}
 			//log.Debug("q len is %di\n", len(q))
@@ -377,18 +391,18 @@ func handler(zt *zmqTool, wg *sync.WaitGroup) {
 				deep}
 			//zt.sender.Send(cmd.Url,0)
 		})
-		
+
 		//scrProf.Remove(utfBody)
 
 		resp.Body.Close()
 		if *memprofile != "" {
 			f, err := os.Create(*memprofile)
 			if err != nil {
-					log.Fatal(err)
-				}
-				pprof.WriteHeapProfile(f)
-				f.Close()
-				os.Exit(0)
+				log.Fatal(err)
+			}
+			pprof.WriteHeapProfile(f)
+			f.Close()
+			os.Exit(0)
 		}
 
 		time.Sleep(time.Millisecond)
@@ -400,13 +414,12 @@ func handler(zt *zmqTool, wg *sync.WaitGroup) {
 }
 
 func GoID() int {
-    var buf [64]byte
-    n := runtime.Stack(buf[:], false)
-    idField := strings.Fields(strings.TrimPrefix(string(buf[:n]), "goroutine "))[0]
-    id, err := strconv.Atoi(idField)
-    if err != nil {
-        panic(fmt.Sprintf("cannot get goroutine id: %v", err))
-    }
-    return id
+	var buf [64]byte
+	n := runtime.Stack(buf[:], false)
+	idField := strings.Fields(strings.TrimPrefix(string(buf[:n]), "goroutine "))[0]
+	id, err := strconv.Atoi(idField)
+	if err != nil {
+		panic(fmt.Sprintf("cannot get goroutine id: %v", err))
+	}
+	return id
 }
-

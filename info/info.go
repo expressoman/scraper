@@ -44,18 +44,18 @@ type VisitLogInfo struct {
 	InfoType IT
 	Msg      VisitLog
 }
+
 func Marshal(i interface{}) (string, error) {
 	b, err := json.Marshal(i)
 	return string(b), err
 }
 
-
 type vsi struct {
 	InfoType IT
-	Msg json.RawMessage
+	Msg      json.RawMessage
 }
 
-func Unmarshal(str string)(IT, interface{}, error) {
+func Unmarshal(str string) (IT, interface{}, error) {
 	//log.Infoln("str=",str)
 	b := []byte(str)
 	var i vsi

@@ -2,11 +2,11 @@ package main
 
 import (
 	"fmt"
-	"math/rand"
 	log "github.com/Sirupsen/logrus"
+	info "github.com/moris351/scraper/info"
 	"gopkg.in/mgo.v2"
 	"gopkg.in/mgo.v2/bson"
-	info "github.com/moris351/scraper/info"
+	"math/rand"
 )
 
 const (
@@ -25,9 +25,10 @@ const (
 )
 
 const (
-	cmdQueueLen = 1000
+	cmdQueueLen  = 1000
 	hostBatchNum = 30
 )
+
 /*type Command struct {
 	Source   string
 	Host     string
@@ -51,10 +52,9 @@ type cmdStore struct {
 	session *mgo.Session
 	db      *mgo.Database
 	hosts   map[string]int
-	cmdQue	chan info.Command
-	sl		[cmdQueueLen]string
+	cmdQue  chan info.Command
+	sl      [cmdQueueLen]string
 }
-
 
 func newCmdStore(dbName string) *cmdStore {
 	cms := new(cmdStore)
@@ -99,7 +99,7 @@ func newCmdStore(dbName string) *cmdStore {
 
 	cms.hosts = make(map[string]int)
 
-	cms.cmdQue = make(chan info.Command,cmdQueueLen)
+	cms.cmdQue = make(chan info.Command, cmdQueueLen)
 
 	//cms.sl = make([]string,cmdQueueLen)
 
@@ -141,7 +141,6 @@ func (cms *cmdStore) addCommand(cmd *info.Command) error {
 	return err
 }
 
-	
 func (cms *cmdStore) nextCommand() (*info.Command, error) {
 	c := cms.db.C(cmdCol)
 	//query:=fmt.Sprintf("{accessed:%d}",unknown)
@@ -154,45 +153,44 @@ func (cms *cmdStore) nextCommand() (*info.Command, error) {
 	}
 
 	if len(cms.cmdQue) > 0 {
-		k:= <-cms.cmdQue
-		log.Printf("cms.cmdQue k=%v len=%d", k,len(cms.cmdQue))
+		k := <-cms.cmdQue
+		log.Printf("cms.cmdQue k=%v len=%d", k, len(cms.cmdQue))
 
 		return &k, nil
 	}
-	
+
 	//sl := make([]string,cmdQueueLen)
 	//scrProf.Add(&sl,1)
-	i:=0
+	i := 0
 	for h, _ := range cms.hosts {
 		hostname = h
 		log.Debug("host :", hostname)
-		cms.sl[i]=hostname
+		cms.sl[i] = hostname
 		i++
-		if i== hostBatchNum {
-		err = c.Find(bson.M{"accessed":unknown, 
-					"deep":bson.M{"$lt":*max_visit_deep},
-					"host":bson.M{"$in":cms.sl}}).
-					Limit(cmdQueueLen).
-					All(&cmds)
+		if i == hostBatchNum {
+			err = c.Find(bson.M{"accessed": unknown,
+				"deep": bson.M{"$lt": *max_visit_deep},
+				"host": bson.M{"$in": cms.sl}}).
+				Limit(cmdQueueLen).
+				All(&cmds)
 
-					
 			if err == nil || len(cmds) > 0 {
 				break
 			}
 			log.Errorf("find err=%v, cms.sl=%v", err, cms.sl)
-			i=0
+			i = 0
 		}
 	}
 
 	perm := rand.Perm(cmdQueueLen)
-	for _,v := range perm{
+	for _, v := range perm {
 		log.Infof("cms.cmdQue[%d]=%v", v, cmds[v])
 
-		cms.cmdQue<-cmds[v]
+		cms.cmdQue <- cmds[v]
 	}
-	v:=<-cms.cmdQue	
+	v := <-cms.cmdQue
 	//scrProf.Remove(&sl)
-	
+
 	return &v, nil
 
 	//return cmds, err
@@ -213,8 +211,8 @@ func (cms *cmdStore) visitLog(vl *info.VisitLog) error {
 	if err != nil {
 		log.Debug("visitLog insert err:", err)
 	}
-	
-	log.Info("visitlog:",vl)
+
+	log.Info("visitlog:", vl)
 
 	return err
 }
