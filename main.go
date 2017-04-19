@@ -23,22 +23,30 @@ import (
 	"time"
 )
 
-var scrProf *pprof.Profile
-
-func init() {
-	profName := "scraper_profile"
-	scrProf = pprof.Lookup(profName)
-	if scrProf == nil {
-		scrProf = pprof.NewProfile(profName)
-	}
-}
-
 const (
 	logstatPort  = ":5557"
 	cmdPort      = ":5558"
 	maxVisitDeep = 5
 )
+const (
+	//cmdStoreAddr string = "mongodb://superAdmin:mstoobad@127.0.0.1:27017/%s?authSource=admin"
+	cmdStoreAddr string = "mongodb://127.0.0.1/%s"
+	dbName       string = "scraper"
+	cmdCol       string = "Command"
+	visitCol     string = "Visit"
+	hostsCol     string = "Hosts"
+)
+const (
+	unknown = iota
+	inQueue
+	gotten
+	failed
+)
 
+const (
+	cmdQueueLen  = 1000
+	hostBatchNum = 30
+)
 var (
 	urls_file      = flag.String("urls_file", "urls.txt", "seed URL file")
 	hander_num     = flag.Int("handler_num", 4, "handler number")
@@ -182,7 +190,6 @@ func parseQueue(cms *cmdStore, zt *zmqTool) {
 				continue
 			}
 			log.Debugln("outCmd=", outCmd)
-			//scrProf.Add(outCmd,1)
 		}
 		log.Debugln("goroutine num=", runtime.NumGoroutine())
 		select {
@@ -212,10 +219,8 @@ func parseQueue(cms *cmdStore, zt *zmqTool) {
 			if err == nil {
 				zt.sender.Send(b, 0)
 			}
-			//zt.sender.Send(vl.String(), 0)
 		}
 
-		//scrProf.Remove(outCmd)
 	}
 }
 
@@ -230,27 +235,8 @@ func rootHostname(hostname string) string {
 	}
 	return v[l-2] + "." + v[l-1]
 }
-/*
-func iconv(source io.Reader, fromEncoding string, toEncoding string) (*iconv.Reader, error) {
-	// create a converter
-	converter, err := iconv.NewConverter(fromEncoding, toEncoding)
-
-	if err == nil {
-		reader := iconv.NewReaderFromConverter(source, converter)
-		converter.Close()
-		return reader, err
-	}
-
-	// return the error
-	return nil, err
-}*/
-
 
 func handler(zt *zmqTool, wg *sync.WaitGroup) {
-	//zt.sender.Send("will visit "+u.String(), 0)
-	/*client := http.Client{
-		Timeout: time.Duration(15 * time.Second),
-	}*/
 
 	gid := GoID()
 
@@ -270,25 +256,9 @@ func handler(zt *zmqTool, wg *sync.WaitGroup) {
 			errQue<-nil
 			continue
 		}
-		//client := http.Client{}
-
-		//log..Info("processing, url=",u.String())
 		log.WithFields(log.Fields{
 			"url": u.String(),
 		}).Info("processing")
-		/*
-			resp, err := client.Get(u.String())
-			//defer resp.Body.Close()
-
-			if err != nil {
-				log.Errorf("error message: %s", err)
-				if resp != nil {resp.Body.Close()}
-				errQue<-nil
-				continue
-			}
-			if err != nil {
-				log.Printf("http.NewRequest failed, err=", err)
-		*/
 
 		req, err := http.NewRequest("GET", u.String(), nil)
 		req.Close = true
@@ -324,10 +294,8 @@ func handler(zt *zmqTool, wg *sync.WaitGroup) {
 			log.Error("iconv.NewReader return err=", err)
 			resp.Body.Close()
 			errQue<-nil
-			//scrProf.Remove(utfBody)
 			continue
 		}
-		//scrProf.Add(utfBody,1)
 		
 		//doc, err := goquery.NewDocumentFromResponse(resp)
 		doc, err := goquery.NewDocumentFromReader(utfBody)
@@ -337,7 +305,6 @@ func handler(zt *zmqTool, wg *sync.WaitGroup) {
 			utfBody.Close()
 			resp.Body.Close()
 			errQue <- nil
-			//scrProf.Remove(utfBody)
 			continue
 		}
 		utfBody.Close()
@@ -348,18 +315,17 @@ func handler(zt *zmqTool, wg *sync.WaitGroup) {
 		title := doc.Find("html title").Text()
 
 		log.WithFields(log.Fields{"title": title, "description": description}).Info("content received")
-		//vli := &info.VisitLogInfo{info.Log,{u.String(), title,description,},}
-		vli := new(info.VisitLogInfo)
-
-		vli.InfoType = info.Log
-		vli.Msg.Url = u.String()
-		vli.Msg.Title = title
-		vli.Msg.Description = description
-
+	
+		vli := &info.VisitLogInfo{
+			InfoType:info.Log,
+			Msg:info.VisitLog{
+				Url:u.String(),
+				Title:title,
+				Description:description,},
+		}
 		logQue <- vli
 
 		if cmd.Deep >= *max_visit_deep {
-			//scrProf.Remove(utfBody)
 			resp.Body.Close()
 			continue
 		}
@@ -389,10 +355,8 @@ func handler(zt *zmqTool, wg *sync.WaitGroup) {
 				ss,
 				unknown,
 				deep}
-			//zt.sender.Send(cmd.Url,0)
 		})
 
-		//scrProf.Remove(utfBody)
 
 		resp.Body.Close()
 		if *memprofile != "" {

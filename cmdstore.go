@@ -9,45 +9,6 @@ import (
 	"math/rand"
 )
 
-const (
-	//cmdStoreAddr string = "mongodb://superAdmin:mstoobad@127.0.0.1:27017/%s?authSource=admin"
-	cmdStoreAddr string = "mongodb://127.0.0.1/%s"
-	dbName       string = "scraper"
-	cmdCol       string = "Command"
-	visitCol     string = "Visit"
-	hostsCol     string = "Hosts"
-)
-const (
-	unknown = iota
-	inQueue
-	gotten
-	failed
-)
-
-const (
-	cmdQueueLen  = 1000
-	hostBatchNum = 30
-)
-
-/*type Command struct {
-	Source   string
-	Host     string
-	Url      string
-	Accessed int
-	Deep     int
-}
-
-type VisitStat struct {
-	Req int
-	Success int
-	Failed	int
-}
-type VisitLog struct {
-	Url         string
-	Title       string
-	Description string
-}
-*/
 type cmdStore struct {
 	session *mgo.Session
 	db      *mgo.Database
