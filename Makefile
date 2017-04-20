@@ -16,7 +16,7 @@ endif
 
 LDFLAGS=-ldflags "-X main.VerTag=${VERTAG} -X main.BuildTime=${BUILD_TIME}"
 all:
-	go build ${LDFLAGS} -o ${OUTPUT} main.go cmdstore.go log.go config.go
+	go build ${LDFLAGS} -o ${OUTPUT} main.go cmdstore.go logbot.go config.go
 fmt:
 	gofmt -w .
 

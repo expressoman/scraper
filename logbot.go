@@ -2,7 +2,7 @@ package main
 
 import (
 	log "github.com/Sirupsen/logrus"
-	"gopkg.in/natefinch/lumberjack.v2"
+	lum "gopkg.in/natefinch/lumberjack.v2"
 
 	"fmt"
 	"io"
@@ -32,24 +32,14 @@ func newLogBot() *logBot {
 	//log.SetOutput(os.Stdout)
 
 	lb := new(logBot)
-	log.SetOutput(io.MultiWriter(&lumberjack.Logger{
+	logger:=&lum.Logger{
 		Filename:   "log/" + filename,
 		MaxSize:    30, // megabytes
 		MaxBackups: 30,
 		MaxAge:     28, //days
-	}, os.Stdout))
+	}
+	log.SetOutput(io.MultiWriter(logger, os.Stdout))
 
-	/*
-		var err error
-		lb.file, err = os.OpenFile(fno, os.O_CREATE|os.O_RDWR|os.O_TRUNC, 0666)
-		if err == nil {
-			//	log.SetOutput(file)
-			log.SetOutput(io.MultiWriter(lb.file, os.Stdout))
-
-		} else {
-			log.Fatal("Failed to log to file, using default stderr")
-		}
-	*/
 	// Only log the warning severity or above.
 	fmt.Printf(*debug_level)
 	var l log.Level
@@ -66,16 +56,18 @@ func newLogBot() *logBot {
 
 	log.SetLevel(l)
 
+	
 	lb.ch = make(chan os.Signal)
 	//	signal.Notify(lb.ch, syscall.SIGUSR1,syscall.SIGINT,syscall.SIGTERM)
-	signal.Notify(lb.ch, syscall.SIGUSR1)
-	/*
-		go func (){
-			s:=<-lb.ch
-			fmt.Printf("signal : %v",s)
-			lb.reset()
-		}()
-	*/
+	signal.Notify(lb.ch, syscall.SIGINT)
+	
+	go func (){
+		s:=<-lb.ch
+		fmt.Printf("signal : %v",s)
+		logger.Rotate()
+		os.Exit(0)
+	}()
+	
 
 	return lb
 }

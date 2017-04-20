@@ -7,6 +7,7 @@ import (
 	"gopkg.in/mgo.v2"
 	"gopkg.in/mgo.v2/bson"
 	"math/rand"
+	"errors"
 )
 
 type cmdStore struct {
@@ -14,7 +15,7 @@ type cmdStore struct {
 	db      *mgo.Database
 	hosts   map[string]int
 	cmdQue  chan info.Command
-	sl      [cmdQueueLen]string
+	sl      [hostBatchNum]string
 }
 
 func newCmdStore(dbName string) *cmdStore {
@@ -102,31 +103,24 @@ func (cms *cmdStore) addCommand(cmd *info.Command) error {
 	return err
 }
 
-func (cms *cmdStore) nextCommand() (*info.Command, error) {
-	c := cms.db.C(cmdCol)
-	//query:=fmt.Sprintf("{accessed:%d}",unknown)
-	//log.Debug("query=",query)
-	var cmds []info.Command
-	var hostname string
-	var err error
-	if len(cms.hosts) == 0 {
-		return nil, nil
+func (cms *cmdStore) fillPreCmdQue() error {
+
+	log.Info("fillPreCmdQue in")
+
+	if len(preOutQue)>0 {
+		log.Debug("fillPreCmdQue: still no need fill, return")
+		return errors.New("no need")
 	}
 
-	if len(cms.cmdQue) > 0 {
-		k := <-cms.cmdQue
-		log.Printf("cms.cmdQue k=%v len=%d", k, len(cms.cmdQue))
-
-		return &k, nil
-	}
-
-	//sl := make([]string,cmdQueueLen)
-	//scrProf.Add(&sl,1)
 	i := 0
+	var err error
+
+	c := cms.db.C(cmdCol)
+	var cmds []info.Command
+	
 	for h, _ := range cms.hosts {
-		hostname = h
-		log.Debug("host :", hostname)
-		cms.sl[i] = hostname
+		log.Debug("host :", h)
+		cms.sl[i] = h
 		i++
 		if i == hostBatchNum {
 			err = c.Find(bson.M{"accessed": unknown,
@@ -143,19 +137,21 @@ func (cms *cmdStore) nextCommand() (*info.Command, error) {
 		}
 	}
 
+	if err !=nil  {	return err }
+	if len(cmds)==0 { return errors.New("no more")}
+
 	perm := rand.Perm(cmdQueueLen)
 	for _, v := range perm {
+		log.Infof("v of perm:%d, len=%d", v, len(cmds))
+		if v >= len(cmds){ continue;}
 		log.Infof("cms.cmdQue[%d]=%v", v, cmds[v])
 
-		cms.cmdQue <- cmds[v]
+		preOutQue <-&cmds[v]
+		//cms.cmdQue <- cmds[v]
 	}
-	v := <-cms.cmdQue
-	//scrProf.Remove(&sl)
-
-	return &v, nil
-
-	//return cmds, err
-
+	log.Info("fillPreCmdQue leave")
+	return nil
+	
 }
 func (cms *cmdStore) updateCommand(url string) error {
 	c := cms.db.C(cmdCol)

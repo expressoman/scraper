@@ -44,7 +44,7 @@ const (
 )
 
 const (
-	cmdQueueLen  = 1000
+	cmdQueueLen  = 100
 	hostBatchNum = 30
 )
 var (
@@ -58,7 +58,8 @@ var (
 
 var (
 	inQue  chan *info.Command      = make(chan *info.Command, 1)
-	outQue chan *info.Command      = make(chan *info.Command, 1)
+	outQue chan *info.Command      = make(chan *info.Command, cmdQueueLen)
+	preOutQue chan *info.Command   = make(chan *info.Command, cmdQueueLen)
 	logQue chan *info.VisitLogInfo = make(chan *info.VisitLogInfo, 1)
 	errQue chan interface{}        = make(chan interface{})
 )
@@ -167,7 +168,7 @@ func main() {
 func parseQueue(cms *cmdStore, zt *zmqTool) {
 
 	var outCmd *info.Command
-	var err error
+	//var err error
 	var vsi info.VisitStatInfo
 	vsi.InfoType = info.Stat
 
@@ -175,26 +176,31 @@ func parseQueue(cms *cmdStore, zt *zmqTool) {
 	defer ticker.Stop()
 
 	for {
+	
 		if outCmd == nil {
-			log.Debug("outCmd == nil")
-			outCmd, err = cms.nextCommand()
-			if err != nil || outCmd == nil {
-				//should be not found err ontinue
-				log.Warnln("should not be found here")
+			if len(preOutQue) == 0{
+				start:=time.Now()
+				err := cms.fillPreCmdQue()
+				if err != nil {
+					//should be not found err ontinue            
+				    log.Warnln("should not be found here")
+				    incmd := <-inQue
+				    //cms.updateCommand(incmd.Url)           
+				    log.Debug("incmd=", incmd)
+				    cms.addCommand(incmd)
+				    outCmd = nil
+				    continue
+				}
 
-				incmd := <-inQue
-				//cms.updateCommand(incmd.Url)
-				log.Debug("incmd=", incmd)
-				cms.addCommand(incmd)
-				outCmd = nil
-				continue
+
+				log.Debugf("cms.fillPreCmdQue last for %v", time.Since(start))
 			}
-			log.Debugln("outCmd=", outCmd)
+			outCmd =<-preOutQue
 		}
 		log.Debugln("goroutine num=", runtime.NumGoroutine())
 		select {
 		case incmd := <-inQue:
-			//log.Debug("incmd=", incmd)
+			log.Debug("incmd=", incmd)
 			//cms.updateCommand(incmd.Url)
 			cms.addCommand(incmd)
 		case outQue <- outCmd:
@@ -219,8 +225,8 @@ func parseQueue(cms *cmdStore, zt *zmqTool) {
 			if err == nil {
 				zt.sender.Send(b, 0)
 			}
-		}
 
+		}
 	}
 }
 
@@ -242,138 +248,164 @@ func handler(zt *zmqTool, wg *sync.WaitGroup) {
 
 	for {
 
-		log.Debugf("[G:%d]before s:=<-q", gid)
-		cmd := <-outQue
-		if cmd == nil {
-			log.Debug(" end of cmds ")
-			break
-		}
-		log.Debug("after s:=<-q, s=", cmd.Url)
-
-		u, err := url.Parse(cmd.Url)
-		if err != nil {
-			log.Errorln("url.Parse err, ", err)
-			errQue<-nil
-			continue
-		}
-		log.WithFields(log.Fields{
-			"url": u.String(),
-		}).Info("processing")
-
-		req, err := http.NewRequest("GET", u.String(), nil)
-		req.Close = true
-		client := http.Client{
-			Timeout: time.Duration(15 * time.Second),
-		}
-		resp, err := client.Do(req)
-		if err != nil {
-			log.Printf("http.DefaultClient failed, err=", err)
-			errQue<-nil
-			continue
-		}
-
-		v := resp.Header.Get("Content-Type")
-		log.WithFields(log.Fields{"charset": v}).Debug("charset")
-
-		cs := strings.Split(v, "=")
-		vd := "GBK"
-
-		if len(cs) == 2 {
-			vd = cs[1]
-		} else {
-			log.Errorf("wrong charset,%s,  can not process, continue",v)
-			resp.Body.Close()
-			errQue<-nil
-			continue
-		}
-		// Convert the designated charset HTML to utf-8 encoded HTML.
-		// `charset` being one of the charsets known by the iconv package.
-		utfBody, err := iconv.NewReader(resp.Body, vd, "utf-8")
-		if err != nil {
-			// handler error
-			log.Error("iconv.NewReader return err=", err)
-			resp.Body.Close()
-			errQue<-nil
-			continue
-		}
-		
-		//doc, err := goquery.NewDocumentFromResponse(resp)
-		doc, err := goquery.NewDocumentFromReader(utfBody)
-		if err != nil {
-			//log.Debug("[ERR] %s %s - %s\n", ctx.Cmd.Method(), ctx.Cmd.URL(), err)
-			log.Error("goquery.NewDocumentFromResponse err=", err)
-			utfBody.Close()
-			resp.Body.Close()
-			errQue <- nil
-			continue
-		}
-		utfBody.Close()
-
-		description, _ := doc.Find("head meta[name='description']").Attr("content")
-		//log.Debugf("description=%s", description)
-
-		title := doc.Find("html title").Text()
-
-		log.WithFields(log.Fields{"title": title, "description": description}).Info("content received")
-	
-		vli := &info.VisitLogInfo{
-			InfoType:info.Log,
-			Msg:info.VisitLog{
-				Url:u.String(),
-				Title:title,
-				Description:description,},
-		}
-		logQue <- vli
-
-		if cmd.Deep >= *max_visit_deep {
-			resp.Body.Close()
-			continue
-		}
-		doc.Find("a[href]").Each(func(i int, s *goquery.Selection) {
-			val, _ := s.Attr("href")
-			//log.Debug("doc.find: val=%s\n", val)
-			u, err := u.Parse(val)
-			if err != nil {
-				log.Errorf("parse failed, href=%s, err=%v", val, err)
-				return
+		select{
+		case cmd := <-outQue:
+			log.Debugf("[G:%d]before s:=<-q", gid)
+			if cmd == nil {
+				log.Debug(" end of cmds ")
+				break
 			}
-			//log.Debug("q len is %di\n", len(q))
-			ss := u.String()
-
-			if i := strings.Index(ss, "#"); i != -1 {
-				ss = ss[0:i]
-			}
-
-			rh := rootHostname(u.Hostname())
-
-			deep := 0
-			if rh == cmd.Host {
-				deep = cmd.Deep + 1
-			}
-			inQue <- &info.Command{cmd.Url,
-				rh,
-				ss,
-				unknown,
-				deep}
-		})
-
-
-		resp.Body.Close()
-		if *memprofile != "" {
-			f, err := os.Create(*memprofile)
-			if err != nil {
-				log.Fatal(err)
-			}
-			pprof.WriteHeapProfile(f)
-			f.Close()
-			os.Exit(0)
+			parseCmd(cmd)
 		}
-
 		time.Sleep(time.Millisecond)
 	}
-
 	wg.Done()
 	log.Debug("after wg.Done")
+}
+func convUtf8(resp *http.Response) ( *goquery.Document,  error){
+	
+	v := resp.Header.Get("Content-Type")
+	log.WithFields(log.Fields{"charset": v}).Debug("charset")
+
+	cs := strings.Split(v, "=")
+	vd := "gbk"
+
+	if len(cs) == 2 {
+		vd = strings.ToLower(cs[1])
+	} 
+	//else {
+		//log.Errorf("wrong charset,%s,  can not process, continue",v)
+		//return err
+	//	vd="utf-8"
+	//}
+	// Convert the designated charset HTML to utf-8 encoded HTML.
+	// `charset` being one of the charsets known by the iconv package.
+	var doc *goquery.Document
+	var utfBody *iconv.Reader
+	var err error
+	
+	defer func(){
+		if utfBody != nil { utfBody.Close()}
+	}()
+	if( vd != "utf-8" ){
+		utfBody, err = iconv.NewReader(resp.Body, vd, "utf-8")
+		if err != nil {
+			// handler error
+			//utfBody.Close()
+
+			log.Error("iconv.NewReader return err=", err)
+			return nil, err
+		}
+		
+		doc, err = goquery.NewDocumentFromReader(utfBody)
+	}else{
+
+		doc, err = goquery.NewDocumentFromResponse(resp)
+	}
+	if err != nil {
+		//log.Debug("[ERR] %s %s - %s\n", ctx.Cmd.Method(), ctx.Cmd.URL(), err)
+		//utfBody.Close()
+		
+		log.Error("goquery.NewDocumentFromResponse err=", err)
+		return nil, err
+	}
+	return doc, err
+}
+
+func parseCmd(cmd *info.Command) error{
+
+	var resp *http.Response
+	//var utfBody *iconv.Reader
+	var err error
+	
+	defer func(){
+		if resp !=nil {
+			resp.Body.Close()
+		}
+		/*if utfBody != nil {
+			utfBody.Close()
+		}*/
+		if err != nil {
+			errQue<-nil
+		}
+	}()
+	
+	log.Debug("after s:=<-q, s=", cmd.Url)
+
+	u, err := url.Parse(cmd.Url)
+	if err != nil {
+		log.Errorln("url.Parse err, ", err)
+		return err
+	}
+	log.WithFields(log.Fields{
+		"url": u.String(),
+	}).Info("processing")
+
+	req, err := http.NewRequest("GET", u.String(), nil)
+	req.Close = true
+	client := http.Client{
+		Timeout: time.Duration(15 * time.Second),
+	}
+	resp, err = client.Do(req)
+	if err != nil {
+		log.Printf("http.DefaultClient failed, err=", err)
+		return err
+	}
+
+	doc, err := convUtf8(resp)
+	if err != nil {
+		return err
+	}
+	description, _ := doc.Find("head meta[name='description']").Attr("content")
+	//log.Debugf("description=%s", description)
+
+	title := doc.Find("html title").Text()
+
+	log.WithFields(log.Fields{"title": title, "description": description}).Info("content received")
+
+	vli := &info.VisitLogInfo{
+		InfoType:info.Log,
+		Msg:info.VisitLog{
+			Url:u.String(),
+			Title:title,
+			Description:description,},
+	}
+	log.Debugln("vli=",vli)
+	logQue <- vli
+
+	if cmd.Deep >= *max_visit_deep {
+		return nil
+	}
+	doc.Find("a[href]").Each(func(i int, s *goquery.Selection) {
+		val, _ := s.Attr("href")
+		log.Debug("doc.find: val=%s\n", val)
+		u, err := u.Parse(val)
+		if err != nil {
+			log.Errorf("parse failed, href=%s, err=%v", val, err)
+			return
+		}
+		//log.Debug("q len is %di\n", len(q))
+		ss := u.String()
+
+		if i := strings.Index(ss, "#"); i != -1 {
+			ss = ss[0:i]
+		}
+
+		rh := rootHostname(u.Hostname())
+
+		deep := 0
+		if rh == cmd.Host {
+			deep = cmd.Deep + 1
+		}
+		inQue <- &info.Command{cmd.Url,
+			rh,
+			ss,
+			unknown,
+			deep}
+	})
+
+
+	return err
 
 }
 
