@@ -6,6 +6,7 @@ import (
 )
 
 type Command struct {
+	Action 	 int
 	Source   string
 	Host     string
 	Url      string

@@ -105,7 +105,6 @@ func (cms *cmdStore) addCommand(cmd *info.Command) error {
 
 func (cms *cmdStore) fillPreCmdQue() error {
 
-	log.Info("fillPreCmdQue in")
 
 	if len(preOutQue)>0 {
 		log.Debug("fillPreCmdQue: still no need fill, return")
@@ -132,7 +131,7 @@ func (cms *cmdStore) fillPreCmdQue() error {
 			if err == nil || len(cmds) > 0 {
 				break
 			}
-			log.Errorf("find err=%v, cms.sl=%v", err, cms.sl)
+			log.Warnf("find err=%v, cms.sl=%v", err, cms.sl)
 			i = 0
 		}
 	}
@@ -140,16 +139,10 @@ func (cms *cmdStore) fillPreCmdQue() error {
 	if err !=nil  {	return err }
 	if len(cmds)==0 { return errors.New("no more")}
 
-	perm := rand.Perm(cmdQueueLen)
+	perm := rand.Perm(len(cmds))
 	for _, v := range perm {
-		log.Infof("v of perm:%d, len=%d", v, len(cmds))
-		if v >= len(cmds){ continue;}
-		log.Infof("cms.cmdQue[%d]=%v", v, cmds[v])
-
 		preOutQue <-&cmds[v]
-		//cms.cmdQue <- cmds[v]
 	}
-	log.Info("fillPreCmdQue leave")
 	return nil
 	
 }

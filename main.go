@@ -15,6 +15,9 @@ import (
 	_ "net/http/pprof"
 	"net/url"
 	"os"
+	"os/signal"
+	"syscall"
+	"io"
 	"runtime"
 	"runtime/pprof"
 	"strconv"
@@ -57,11 +60,15 @@ var (
 )
 
 var (
-	inQue  chan *info.Command      = make(chan *info.Command, 1)
+	inQue  chan *info.Command      = make(chan *info.Command, 10*cmdQueueLen)
 	outQue chan *info.Command      = make(chan *info.Command, cmdQueueLen)
 	preOutQue chan *info.Command   = make(chan *info.Command, cmdQueueLen)
 	logQue chan *info.VisitLogInfo = make(chan *info.VisitLogInfo, 1)
+
+	reqQue chan interface{}        = make(chan interface{})
 	errQue chan interface{}        = make(chan interface{})
+	closeQue chan interface{}	=make(chan interface{})
+	lb *logBot = nil
 )
 
 type zmqTool struct {
@@ -103,6 +110,9 @@ func main() {
 	if *version {
 		return
 	}
+	
+	log.Info("scraper session begin")
+
 	if *cpuprofile != "" {
 		f, err := os.Create(*cpuprofile)
 		if err != nil {
@@ -112,8 +122,10 @@ func main() {
 		defer pprof.StopCPUProfile()
 	}
 
-	lb := newLogBot()
+	lb = newLogBot()
 	defer lb.close()
+
+	//lb.Debug("test")
 
 	zt := newZmqTool()
 	defer zt.close()
@@ -139,8 +151,8 @@ func main() {
 	strs := strings.Split(string(urls), "\n")
 
 	cms := newCmdStore(dbName)
-	go parseQueue(cms, zt)
-
+	go parseQueue(cms)
+	go parseLog(cms,zt)
 	for _, str := range strs {
 		if len(str) > 0 {
 			u, err := url.Parse(str)
@@ -158,6 +170,16 @@ func main() {
 		}
 	}
 
+	sigQue := make(chan os.Signal)
+	//	signal.Notify(lb.ch, syscall.SIGUSR1,syscall.SIGINT,syscall.SIGTERM)
+	signal.Notify(sigQue, syscall.SIGINT)
+	go func (){
+		<-sigQue
+		log.Info("SIGINT received")
+		closeQue<-nil
+	}()
+
+
 	go func() {
 		log.Println(http.ListenAndServe(":6060", nil))
 	}()
@@ -165,18 +187,54 @@ func main() {
 	wg.Wait()
 	log.Debug("end of main")
 }
-func parseQueue(cms *cmdStore, zt *zmqTool) {
 
-	var outCmd *info.Command
-	//var err error
+func parseLog(cms *cmdStore, zt *zmqTool){
 	var vsi info.VisitStatInfo
 	vsi.InfoType = info.Stat
 
 	ticker := time.NewTicker(3 * time.Second)
 	defer ticker.Stop()
-
 	for {
-	
+		select{
+		case <-errQue:
+			vsi.Msg.Failed++
+			//log.Debug("vl:=<-log,vl=", vl)
+		case <-ticker.C:
+			b, err := info.Marshal(vsi)
+			if err == nil {
+				zt.sender.Send(b, 0)
+			}
+		case <-reqQue:
+			vsi.Msg.Req++
+
+		case vli := <-logQue:
+			log.Debug("vli:=<-log,vli=", vli)
+			vsi.Msg.Success++
+			cms.visitLog(&vli.Msg)
+
+			b, err := info.Marshal(vli)
+			if err == nil {
+				zt.sender.Send(b, 0)
+			}
+		}
+	}
+}
+func parseQueue(cms *cmdStore) {
+
+	var outCmd *info.Command
+	//var err error
+	parseQueueLoop:
+	for {
+		select{
+		case <-closeQue:
+			outQue<-&info.Command{Action:0}
+			close(closeQue)
+			log.Info("break parseQueueLoop")
+			break parseQueueLoop
+		default:
+			//keep going
+		}
+
 		if outCmd == nil {
 			if len(preOutQue) == 0{
 				start:=time.Now()
@@ -195,10 +253,12 @@ func parseQueue(cms *cmdStore, zt *zmqTool) {
 
 				log.Debugf("cms.fillPreCmdQue last for %v", time.Since(start))
 			}
+
 			outCmd =<-preOutQue
 		}
 		log.Debugln("goroutine num=", runtime.NumGoroutine())
 		select {
+				
 		case incmd := <-inQue:
 			log.Debug("incmd=", incmd)
 			//cms.updateCommand(incmd.Url)
@@ -206,27 +266,9 @@ func parseQueue(cms *cmdStore, zt *zmqTool) {
 		case outQue <- outCmd:
 			log.Debug("outQue<-outCmd,outCmd=", outCmd)
 			cms.updateCommand(outCmd.Url)
-			vsi.Msg.Req++
+			reqQue<-nil
 			outCmd = nil
-		case <-errQue:
-			vsi.Msg.Failed++
-			//log.Debug("vl:=<-log,vl=", vl)
-		case <-ticker.C:
-			b, err := info.Marshal(vsi)
-			if err == nil {
-				zt.sender.Send(b, 0)
-			}
-		case vli := <-logQue:
-			log.Debug("vli:=<-log,vli=", vli)
-			vsi.Msg.Success++
-			cms.visitLog(&vli.Msg)
-
-			b, err := info.Marshal(vli)
-			if err == nil {
-				zt.sender.Send(b, 0)
-			}
-
-		}
+	}
 	}
 }
 
@@ -246,16 +288,20 @@ func handler(zt *zmqTool, wg *sync.WaitGroup) {
 
 	gid := GoID()
 
+	handlerLoop:
 	for {
-
-		select{
+		select {
+		case <-closeQue:
+			//log.WithFields(log.Fields{"gid":gid}).Info("break handlerLoop")
+			lb.Info(gid,"break handlerLoop")
+			break handlerLoop
 		case cmd := <-outQue:
 			log.Debugf("[G:%d]before s:=<-q", gid)
-			if cmd == nil {
+			if cmd != nil && cmd.Action==0 {
 				log.Debug(" end of cmds ")
 				break
 			}
-			parseCmd(cmd)
+			parseCmd(gid,cmd)
 		}
 		time.Sleep(time.Millisecond)
 	}
@@ -282,13 +328,15 @@ func convUtf8(resp *http.Response) ( *goquery.Document,  error){
 	// `charset` being one of the charsets known by the iconv package.
 	var doc *goquery.Document
 	var utfBody *iconv.Reader
+	var converter *iconv.Converter
+
 	var err error
 	
 	defer func(){
-		if utfBody != nil { utfBody.Close()}
+		if converter != nil { converter.Close()}
 	}()
 	if( vd != "utf-8" ){
-		utfBody, err = iconv.NewReader(resp.Body, vd, "utf-8")
+		utfBody,converter, err = NewReader(resp.Body, vd, "utf-8")
 		if err != nil {
 			// handler error
 			//utfBody.Close()
@@ -312,7 +360,22 @@ func convUtf8(resp *http.Response) ( *goquery.Document,  error){
 	return doc, err
 }
 
-func parseCmd(cmd *info.Command) error{
+// NewReader is modified to close the converter
+func NewReader(source io.Reader, fromEncoding string, toEncoding string) (*iconv.Reader, *iconv.Converter, error) {
+	// create a converter
+		converter, err := iconv.NewConverter(fromEncoding, toEncoding)
+
+	if err == nil {
+		reader := iconv.NewReaderFromConverter(source, converter)
+		//converter.Close()
+		return reader, converter,err
+	}
+
+	// return the error
+	return nil,nil, err
+}
+
+func parseCmd(gid int, cmd *info.Command) error{
 
 	var resp *http.Response
 	//var utfBody *iconv.Reader
@@ -370,7 +433,7 @@ func parseCmd(cmd *info.Command) error{
 			Title:title,
 			Description:description,},
 	}
-	log.Debugln("vli=",vli)
+	lb.Debug(gid,"vli=",vli)
 	logQue <- vli
 
 	if cmd.Deep >= *max_visit_deep {
@@ -378,7 +441,7 @@ func parseCmd(cmd *info.Command) error{
 	}
 	doc.Find("a[href]").Each(func(i int, s *goquery.Selection) {
 		val, _ := s.Attr("href")
-		log.Debug("doc.find: val=%s\n", val)
+		lb.Debug(gid,"doc.find: val=", val)
 		u, err := u.Parse(val)
 		if err != nil {
 			log.Errorf("parse failed, href=%s, err=%v", val, err)
@@ -397,7 +460,9 @@ func parseCmd(cmd *info.Command) error{
 		if rh == cmd.Host {
 			deep = cmd.Deep + 1
 		}
-		inQue <- &info.Command{cmd.Url,
+		inQue <- &info.Command{
+			1,
+			cmd.Url,
 			rh,
 			ss,
 			unknown,

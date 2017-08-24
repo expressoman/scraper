@@ -19,5 +19,6 @@ all:
 	go build ${LDFLAGS} -o ${OUTPUT} main.go cmdstore.go logbot.go config.go
 fmt:
 	gofmt -w .
-
+clean:
+	go clean ./...
 

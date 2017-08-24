@@ -7,8 +7,6 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"os/signal"
-	"syscall"
 	_ "time"
 )
 
@@ -19,7 +17,6 @@ const (
 
 type logBot struct {
 	file *os.File
-	ch   chan os.Signal
 }
 
 func newLogBot() *logBot {
@@ -34,8 +31,8 @@ func newLogBot() *logBot {
 	lb := new(logBot)
 	logger:=&lum.Logger{
 		Filename:   "log/" + filename,
-		MaxSize:    30, // megabytes
-		MaxBackups: 30,
+		MaxSize:    100, // megabytes
+		MaxBackups: 100,
 		MaxAge:     28, //days
 	}
 	log.SetOutput(io.MultiWriter(logger, os.Stdout))
@@ -55,17 +52,10 @@ func newLogBot() *logBot {
 	}
 
 	log.SetLevel(l)
-
-	
-	lb.ch = make(chan os.Signal)
-	//	signal.Notify(lb.ch, syscall.SIGUSR1,syscall.SIGINT,syscall.SIGTERM)
-	signal.Notify(lb.ch, syscall.SIGINT)
 	
 	go func (){
-		s:=<-lb.ch
-		fmt.Printf("signal : %v",s)
-		logger.Rotate()
-		os.Exit(0)
+	//	<-closeQue
+	//	logger.Rotate()
 	}()
 	
 
@@ -88,8 +78,15 @@ func (lb *logBot) reset() {
 		log.Fatal("Failed to log to file, using default stderr")
 	}
 }
-
-func (lb *logBot) Debug() {
-	log.Debug("tet")
-
+func (lb *logBot) GoID() int{
+	return GoID()
 }
+
+func (lb *logBot) Debug(gid int, args ...interface{}) {
+	log.WithFields(log.Fields{"gid":gid}).Debug(args...)
+}
+
+func (lb *logBot) Info(gid int, args ...interface{}) {
+	log.WithFields(log.Fields{"gid":gid}).Debug(args...)
+}
+
